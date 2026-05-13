@@ -1,0 +1,31 @@
+# ── UI Framework ───────────────────────────────────────────────────────────
+PySide6==6.7.0                     # Replaces PyQt6 — LGPL license, identical API
+
+# ── Computer Vision ─────────────────────────────────────────────────────────
+opencv-python==4.9.0.80            # Camera capture + frame preprocessing
+mediapipe==0.10.14                 # Entry: FaceMesh (liveness), Monitoring: FaceDetection + Iris
+numpy>=1.26.4,<2.0                 # Required by OpenCV and MediaPipe
+pillow==10.3.0                     # Image handling for snapshot compression
+
+# ── Networking ──────────────────────────────────────────────────────────────
+requests==2.31.0                   # Sync HTTP for API calls (login, enroll, verify)
+httpx==0.27.0                      # Async HTTP for non-blocking API calls
+websockets==12.0                   # Heartbeat + event sync WebSocket
+
+# ── Local Cache ─────────────────────────────────────────────────────────────
+# sqlcipher3 removed for now — requires manual OpenSSL compilation on Windows
+# Will be added in security hardening phase
+# sqlcipher3==0.5.3
+python-dotenv==1.0.1               # .env config loading
+cryptography==42.0.7               # Encryption utilities for local cache key management
+
+# ── Windows Integration ─────────────────────────────────────────────────────
+pywin32==306                       # Win32 API — window/cursor/clipboard monitoring
+psutil==5.9.8                      # Process scanning for prohibited apps
+wmi==1.5.1                         # VM detection via WMI queries
+
+# ── Removed from original ───────────────────────────────────────────────────
+# deepface==0.0.90      — removed, face verification runs server-side only
+# PyQt6==6.7.0          — replaced by PySide6
+# PyQt6-Qt6==6.7.0      — replaced by PySide6
+# sqlcipher3==0.5.3     — deferred to security hardening phase

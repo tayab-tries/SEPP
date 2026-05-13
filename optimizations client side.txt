@@ -1,0 +1,50 @@
+Camera & Vision Optimizations
+
+Two-process camera architecture — EntryProcess (FaceMesh) exits after liveness passes, MonitoringProcess (Face Detection + Iris) takes over
+Liveness check implementation — blink detection (EAR) + head movement challenge in entry process
+Resolution scaling — capture at 640x480, downscale to 320x240 for MediaPipe analysis, keep full res for snapshots only
+Adaptive FPS — 10fps during active monitoring, drop to 2fps if student idle for 30s, back to 10fps on activity
+
+
+Data & I/O Optimizations
+
+Answer cache writes on change only — compare current answer to last saved before writing, skip if identical
+Event severity-based flushing — CRITICAL/HIGH events sent immediately, MEDIUM/LOW/INFO batched every 30s
+
+
+Process & Memory Optimizations
+
+Lazy MediaPipe loading — don't load Face Detection + Iris models until entry process exits, not at app startup
+MediaPipe model sharing — Face Detection and Iris share one MediaPipe runtime instance, not two separate contexts
+Frame buffer management — release OpenCV frame from memory immediately after analysis tick, don't hold references
+
+
+Network Optimizations
+
+Snapshot compression before upload — compress re-verification JPEG to 85% quality before uploading to server, reduces bandwidth with no meaningful accuracy loss
+Answer sync on change only — same as cache writes, only sync answers to server if content actually changed since last sync
+
+
+UI & System Optimizations
+
+Camera release on exam pause — if examiner pauses exam, release camera resource, reacquire on resume
+Process scanner interval scaling — scan for prohibited processes every 30s normally, increase to every 10s if a violation was recently detected
+Heartbeat payload minimization — currently sends full client state on every heartbeat, strip to minimum (timestamp only) for normal heartbeats
+
+
+DONE    Answer cache writes on change only | client/core/local_cache.py
+Event severity-based flushing | client/core/event_logger.py
+Two-process camera architecture | client/modules/proctoring/camera_monitor.py
+Liveness check (FaceMesh entry) | client/modules/proctoring/camera_monitor.py
+Face Detection + Iris monitoring | client/modules/proctoring/camera_monitor.py
+Resolution scaling 640→320 | client/modules/proctoring/camera_monitor.py
+Adaptive FPS | client/modules/proctoring/camera_monitor.py
+Lazy MediaPipe loading | client/modules/proctoring/camera_monitor.py
+MediaPipe model sharing | client/modules/proctoring/camera_monitor.py
+Frame buffer management 
+Snapshot compression
+Answer sync on change only | client/core/heartbeat.py
+DONE Heartbeat payload minimization
+Camera release on exam pause | client/modules/exam_engine/exam_window.py
+Process scanner interval scaling | client/modules/proctoring/activity_monitor.py
+Process killing after liveness | lient/modules/exam_engine/exam_window.py

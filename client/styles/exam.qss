@@ -1,0 +1,266 @@
+/*
+ * client/styles/exam.qss
+ * Exam engine stylesheet — loaded once at app startup.
+ *
+ * Naming convention:
+ *   objectName-based selectors (#name) for specific widgets
+ *   class-based selectors (QLabel, QPushButton) for globals
+ *   property selectors ([property="value"]) for state variants
+ */
+
+/* ── Global ──────────────────────────────────────────────────────────────── */
+
+QMainWindow, QWidget {
+    background-color: #1a1a2e;
+    color: #e0e0e0;
+    font-family: "Segoe UI", "Arial", sans-serif;
+    font-size: 13px;
+}
+
+QLabel {
+    color: #e0e0e0;
+    background: transparent;
+}
+
+/* ── Top bar ─────────────────────────────────────────────────────────────── */
+
+#timer_label {
+    font-size: 15px;
+    font-weight: bold;
+    color: #e0e0e0;
+    padding: 4px 8px;
+}
+
+#timer_label[warning="true"] {
+    color: #e74c3c;
+}
+
+#progress_label {
+    font-size: 13px;
+    color: #a0a0b0;
+    padding: 4px 8px;
+}
+
+/* ── Navigation buttons ──────────────────────────────────────────────────── */
+
+#prev_btn, #next_btn {
+    background-color: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 6px;
+    padding: 8px 20px;
+    font-size: 13px;
+    min-width: 100px;
+}
+
+#prev_btn:hover, #next_btn:hover {
+    background-color: #0f3460;
+}
+
+#prev_btn:disabled, #next_btn:disabled {
+    color: #555566;
+    border-color: #333344;
+}
+
+#submit_btn {
+    background-color: #27ae60;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 24px;
+    font-size: 13px;
+    font-weight: bold;
+    min-width: 120px;
+}
+
+#submit_btn:hover {
+    background-color: #2ecc71;
+}
+
+#submit_btn:disabled {
+    background-color: #1a5e35;
+    color: #aaaaaa;
+}
+
+/* ── MCQ Widget ──────────────────────────────────────────────────────────── */
+
+#mcq_question_text {
+    font-size: 16px;
+    font-weight: bold;
+    color: #e0e0e0;
+    line-height: 1.5;
+}
+
+#mcq_marks_label {
+    color: #888899;
+    font-size: 12px;
+}
+
+QRadioButton {
+    font-size: 14px;
+    color: #d0d0e0;
+    padding: 8px 4px;
+    spacing: 8px;
+}
+
+QRadioButton:hover {
+    color: #ffffff;
+}
+
+QRadioButton::indicator {
+    width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    border: 2px solid #0f3460;
+    background-color: #16213e;
+}
+
+QRadioButton::indicator:checked {
+    background-color: #0f3460;
+    border-color: #4fc3f7;
+}
+
+/* ── Essay Widget ────────────────────────────────────────────────────────── */
+
+#essay_question_text {
+    font-size: 16px;
+    font-weight: bold;
+    color: #e0e0e0;
+    line-height: 1.5;
+}
+
+#essay_info_label {
+    color: #888899;
+    font-size: 12px;
+}
+
+#essay_text_edit {
+    font-size: 14px;
+    background-color: #16213e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 10px;
+    selection-background-color: #0f3460;
+}
+
+#essay_text_edit:focus {
+    border-color: #4fc3f7;
+}
+
+#word_count_label {
+    color: #888899;
+    font-size: 12px;
+}
+
+#word_count_label[status="warning"] {
+    color: #f39c12;
+}
+
+#word_count_label[status="over"] {
+    color: #e74c3c;
+}
+
+/* ── Liveness Overlay ────────────────────────────────────────────────────── */
+
+#liveness_overlay {
+    background-color: rgba(10, 10, 20, 230);
+    border-radius: 0px;
+}
+
+#liveness_title {
+    font-size: 24px;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+#liveness_instruction {
+    font-size: 15px;
+    color: #ccccdd;
+    line-height: 1.8;
+}
+
+#liveness_status {
+    font-size: 13px;
+    color: #f39c12;
+}
+
+#liveness_status[state="passed"] {
+    color: #2ecc71;
+}
+
+#liveness_status[state="failed"] {
+    color: #e74c3c;
+}
+
+/* ── Lockdown Overlay ────────────────────────────────────────────────────── */
+
+#lockdown_overlay {
+    background-color: rgba(0, 0, 0, 200);
+    border-radius: 0px;
+}
+
+#lockdown_title {
+    font-size: 20px;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+#lockdown_message {
+    font-size: 14px;
+    color: #cccccc;
+}
+
+#lockdown_countdown {
+    font-size: 28px;
+    font-weight: bold;
+    color: #e74c3c;
+}
+
+#lockdown_countdown[urgent="true"] {
+    color: #ff0000;
+}
+
+/* ── Scrollbars ──────────────────────────────────────────────────────────── */
+
+QScrollBar:vertical {
+    background: #16213e;
+    width: 10px;
+    border-radius: 5px;
+}
+
+QScrollBar::handle:vertical {
+    background: #0f3460;
+    border-radius: 5px;
+    min-height: 20px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #4fc3f7;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* ── Message boxes ───────────────────────────────────────────────────────── */
+
+QMessageBox {
+    background-color: #1a1a2e;
+    color: #e0e0e0;
+}
+
+QMessageBox QPushButton {
+    background-color: #0f3460;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 6px 16px;
+    min-width: 80px;
+}
+
+QMessageBox QPushButton:hover {
+    background-color: #4fc3f7;
+    color: #1a1a2e;
+}

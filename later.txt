@@ -1,0 +1,81 @@
+deployability on linux
+
+Prevent SPACEBAR input in pasword email
+Rate limiting on /auth/login
+rate limiting on /auth/verify-face
+file type validation on image uplaods
+max file size limit on uplaods
+reduce threshold for facial similarity to 0.65
+printed photo of a faceis detected as well. work on that
+full liveness addition
+!! Examiner registration will be approved by server admin
+only proper email to be added. not random absab.com domains
+
+/*
+Good catch. No — we haven't added input validation or sanitization yet. Here's what's currently unprotected:
+
+Examiner side (question creation)
+
+text field — no length limit, could submit 100,000 character questions
+options array — no limit on number of options or option text length
+correct_option — no validation that it actually matches one of the provided options (e.g. examiner submits options ["A","B","C"] but correct_option: "Z")
+marks — no upper bound, could set marks: 999999
+min_words > max_words — no check that min is less than max
+
+Student side (answer submission)
+
+Essay answers — no server-side max length enforcement (only client-side word count in the widget)
+A student could bypass the PyQt6 client entirely and POST a 10MB essay directly to the API
+No stripping of HTML/script tags from essay text (stored raw in DB, could cause issues if ever rendered)
+*/
+
+truncate the class [the exam id aready is 6 alphabet words. change it to alphanumeric (optional)] and exam ids and question ids to a more user friendly digit
+add radnomness to exam options answers and questions fro different students
+approve admission to the class by student id instead of enollment id
+
+Before we move to the client, a quick summary of what's still pending on the server side for later:
+
+Security hardening (rate limiting, file validation — already saved to memory)
+Input validation on essay questions
+POST /auth/re-enroll-face
+Approve enrollment by student_id instead of enrollment_id
+Alembic migrations setup (currently using create_all which is fine for dev)
+
+
+
+SECURITY Optimizations
+Switch HTTP → HTTPS + WSSJWT tokens, face images, exam data, WebSocket frames in transit LAN testing phase
+Generate self-signed TLS cert for LAN deploymentServer identity verificationLAN testing phase
+SQLCipher for local answer cacheStudent answers + proctoring events on disk if machine is stolenSecurity hardening phase
+Encrypt face embedding column in PostgreSQL via pgcryptoBiometric data at rest in DBSecurity hardening phase
+Encrypt snapshot images on diskBiometric photos saved during re-verificationSecurity hardening phase
+Secure JWT secret key managementPrevent token forgery if server is compromisedSecurity hardening phase
+reduce token lifetime from 12 hours to less
+
+
+
+LATER UI CLIENT 
+- Add to the dropdown lists that we have made in the sign up / login page and kink out the details such as the class enrollment to link with the create
+  class button that we will add on later in the examiner side / join by student side
+  What if CAMERA Not available
+  
+  LATER server
+  Yes — two files need updating because we changed full_name to first_name + last_name.
+server/routers/exams.py — check for any place that accesses user.full_name directly. Since we made it a @property on the model it still works, so no changes needed there.
+server/routers/sessions.py — same, user.full_name still works via the property. No changes needed.
+server/routers/auth.py — already updated with first_name, last_name, institution, department, subject. ✅
+server/models/models.py — already updated. ✅
+The one thing to watch — the existing test data users (student1@test.com, examiner1@test.com) were registered with the old schema and are now gone since we dropped the DB. You'll need to re-register them through the new signup flow once we confirm it works. Run it and paste the output
+
+Check NAME input for only alphabets
+
+CPUID VM detection in C++ DLL⏳ Add alongside keyboard hooks
+Student dashboard❌ Not built
+Examiner dashboard❌ Not built
+Results screen❌ Not built
+Security hardening (rate limiting, file validation)❌ Saved to memory
+SQLCipher local cache encryption❌ Dev mode only
+❌ LAN deployment phase
+⏳ Partially discussed
+Alembic migrations❌ Currently using create_all
+Integration test (real login → real exam flow)⏳ Pending frontend completion
