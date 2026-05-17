@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from server.database import get_db
-from server.models.models import Class, Enrollment, Exam, Question, User
+from server.models.models import Class, Enrollment, Exam, Question, User, ExamSession
 from server.dependencies import get_current_user, require_examiner, require_student
 from shared.constants import ExamStatus, QuestionType, Role
 
@@ -72,6 +72,24 @@ class ExamStatusUpdate(BaseModel):
 def generate_join_code(length: int = 6) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+def serialize_student_exam(e: Exam) -> dict:
+    return {
+        "id": e.id,
+        "exam_id": e.id,
+
+        "class_id": e.class_id,
+        "course_code": e.class_.join_code if e.class_ else None,
+
+        "title": e.title,
+        "description": e.description,
+        "status": e.status.value if hasattr(e.status, "value") else str(e.status),
+
+        "duration_minutes": e.duration_minutes,
+        "start_time": e.scheduled_start.isoformat() if e.scheduled_start else None,
+        "end_time": e.scheduled_end.isoformat() if e.scheduled_end else None,
+
+        "exam_type": "Proctored" if e.require_liveness_check else "Open Book",
+    }
 
 # ── Class Routes ───────────────────────────────────────────────────────────
 
@@ -409,31 +427,105 @@ def list_student_exams(
         Enrollment.student_id == current_user.id,
         Enrollment.approved == True,
     ).all()
+
     approved_class_ids = {e.class_id for e in approved_enrollments}
 
     if class_id:
         if class_id not in approved_class_ids:
             raise HTTPException(status_code=403, detail="Not enrolled in this class")
-        exams = db.query(Exam).filter(Exam.class_id == class_id).all()
+
+        exams = (
+            db.query(Exam)
+            .filter(Exam.class_id == class_id)
+            .order_by(Exam.scheduled_start.asc())
+            .all()
+        )
     else:
         if not approved_class_ids:
             return []
-        exams = db.query(Exam).filter(Exam.class_id.in_(approved_class_ids)).all()
 
-    return [
-        {
-            "exam_id": e.id,
-            "class_id": e.class_id,
-            "title": e.title,
-            "description": e.description,
-            "status": e.status,
-            "duration_minutes": e.duration_minutes,
-            "scheduled_start": e.scheduled_start,
-            "scheduled_end": e.scheduled_end,
-        }
-        for e in exams
+        exams = (
+            db.query(Exam)
+            .filter(Exam.class_id.in_(approved_class_ids))
+            .order_by(Exam.scheduled_start.asc())
+            .all()
+        )
+
+    return [serialize_student_exam(e) for e in exams]
+
+@router.get("/exams/upcoming")
+def list_upcoming_assessments(
+    limit: int = 5,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Upcoming assessments for the authenticated student.
+    Returns future scheduled exams across approved classes.
+    """
+    approved_class_ids = [
+        e.class_id
+        for e in db.query(Enrollment).filter(
+            Enrollment.student_id == current_user.id,
+            Enrollment.approved == True,
+        ).all()
     ]
 
+    if not approved_class_ids:
+        return []
+
+    now = datetime.utcnow()
+
+    exams = (
+        db.query(Exam)
+        .filter(
+            Exam.class_id.in_(approved_class_ids),
+            Exam.scheduled_start.isnot(None),
+            Exam.scheduled_start >= now,
+        )
+        .order_by(Exam.scheduled_start.asc())
+        .limit(limit)
+        .all()
+    )
+
+    return [serialize_student_exam(e) for e in exams]
+
+@router.get("/exams/next")
+def get_next_exam(
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Next immediate upcoming exam for the authenticated student.
+    """
+    approved_class_ids = [
+        e.class_id
+        for e in db.query(Enrollment).filter(
+            Enrollment.student_id == current_user.id,
+            Enrollment.approved == True,
+        ).all()
+    ]
+
+    if not approved_class_ids:
+        return None
+
+    now = datetime.utcnow()
+
+    exam = (
+        db.query(Exam)
+        .filter(
+            Exam.class_id.in_(approved_class_ids),
+            Exam.scheduled_start.isnot(None),
+            Exam.scheduled_start >= now,
+        )
+        .order_by(Exam.scheduled_start.asc())
+        .first()
+    )
+
+    if not exam:
+        return None
+
+    return serialize_student_exam(exam)
 
 @router.get("/exams/examiner/owned")
 def list_examiner_exams(
@@ -659,3 +751,45 @@ def delete_question(
     db.commit()
 
     return {"message": "Question deleted"}
+
+@router.get("/results/recent")
+def list_recent_results(
+    limit: int = 5,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Recent submitted exam results for the authenticated student.
+    """
+    sessions = (
+        db.query(ExamSession)
+        .join(Exam, ExamSession.exam_id == Exam.id)
+        .filter(
+            ExamSession.student_id == current_user.id,
+            ExamSession.submitted_at.isnot(None),
+        )
+        .order_by(ExamSession.submitted_at.desc())
+        .limit(limit)
+        .all()
+    )
+
+    return [
+        {
+            "session_id": s.id,
+            "exam_id": s.exam_id,
+
+            "class_id": s.exam.class_id if s.exam else None,
+            "course_code": s.exam.class_.join_code if s.exam and s.exam.class_ else None,
+
+            "title": s.exam.title if s.exam else "Untitled Exam",
+            "submitted_at": s.submitted_at.isoformat() if s.submitted_at else None,
+
+            "mcq_score": s.mcq_score,
+            "essay_score": s.essay_score,
+            "total_score": (s.mcq_score or 0) + (s.essay_score or 0),
+            "integrity_score": s.integrity_score,
+
+            "status": s.status.value if hasattr(s.status, "value") else str(s.status),
+        }
+        for s in sessions
+    ]

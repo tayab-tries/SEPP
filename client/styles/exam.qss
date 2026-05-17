@@ -8,20 +8,6 @@
  *   property selectors ([property="value"]) for state variants
  */
 
-/* ── Global ──────────────────────────────────────────────────────────────── */
-
-QMainWindow, QWidget {
-    background-color: #1a1a2e;
-    color: #e0e0e0;
-    font-family: "Segoe UI", "Arial", sans-serif;
-    font-size: 13px;
-}
-
-QLabel {
-    color: #e0e0e0;
-    background: transparent;
-}
-
 /* ── Top bar ─────────────────────────────────────────────────────────────── */
 
 #timer_label {

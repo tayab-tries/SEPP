@@ -9,7 +9,7 @@ import os
 from typing import Optional
 
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent, QCloseEvent
 
 from client.modules.common.loading_spinner import SpinnerOverlay
@@ -28,11 +28,11 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("ExamApp")
-        self.showFullScreen()
         self.setWindowFlags(
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint,
         )
+        self.showFullScreen()
 
         self._is_transitioning = False
         self._pending_page: Optional[int] = None
@@ -55,10 +55,10 @@ class MainWindow(QMainWindow):
 
     def _load_pages(self):
         from client.modules.auth.ui.startup_ui import StartupUI
-        from client.modules.auth.ui.login_ui   import LoginUI
-        from client.modules.auth.ui.signup_ui  import SignupUI
-        from client.modules.auth.login_window  import LoginWindow
-        from client.modules.auth.signup_window import SignupWindow
+        from client.auth.ui.login_ui   import LoginUI
+        from client.auth.ui.signup_ui  import SignupUI
+        from client.auth.login_window  import LoginWindow
+        from client.auth.signup_window import SignupWindow
 
         # Page 0 — Startup
         self._startup_ui = StartupUI()
@@ -90,15 +90,22 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._examiner_placeholder)  # index 4
 
     def _build_student_dashboard(self):
-        from client.modules.dashboard.student_dashboard import StudentDashboard
-        self._student_dashboard = StudentDashboard()
-        self._student_dashboard.start_exam_requested.connect(self._on_start_exam_requested)
+        from client.dashboard.views.dashboard_page import DashboardPage
+        # Or use the real project path, for example:
+        # from dashboard.dashboard_page import DashboardPage
+        # from client.modules.dashboard.dashboard_page import DashboardPage
+
+        self._student_dashboard = DashboardPage()
+        self._student_dashboard.nav_requested.connect(self._on_dashboard_nav_requested)
+
         # Replace the placeholder at index 3 without disturbing other indices.
         self._stack.insertWidget(PAGE_STUDENT_DASHBOARD, self._student_dashboard)
+
         ph = self._student_placeholder
         if ph is not None:
             self._stack.removeWidget(ph)
             ph.deleteLater()
+
         self._student_placeholder = None
 
     def _build_examiner_dashboard(self):
@@ -181,8 +188,11 @@ class MainWindow(QMainWindow):
         logger.info("Login successful — %s (%s)", full_name, role)
         self._login_ui.set_loading(False)
         self._active_role = role
+        
+        role_key = str(role).strip().lower()
+        self._active_role = role_key
 
-        if role == "student":
+        if role_key == "student":
             if self._student_dashboard is None:
                 self._build_student_dashboard()
             dash_s = self._student_dashboard
@@ -195,7 +205,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        if role == "examiner":
+        if role_key == "examiner":
             if self._examiner_dashboard is None:
                 self._build_examiner_dashboard()
             dash_e = self._examiner_dashboard
@@ -274,3 +284,26 @@ class MainWindow(QMainWindow):
                 self.close()
                 return
         super().keyPressEvent(event)
+
+    def _on_dashboard_nav_requested(self, label: str) -> None:
+        key = label.strip().lower()
+
+        routes = {
+            "dashboard": PAGE_STUDENT_DASHBOARD,
+            "home": PAGE_STUDENT_DASHBOARD,
+
+            # Later, when you create these pages:
+            # "exams": PAGE_EXAMS,
+            # "results": PAGE_RESULTS,
+            # "settings": PAGE_SETTINGS,
+        }
+
+        page_index = routes.get(key)
+
+        if page_index is not None:
+            self._navigate_to(page_index)
+            return
+
+        # Page does not exist yet, so keep showing the same dashboard-style dialog.
+        if self._student_dashboard is not None:
+            self._student_dashboard.show_nav_dialog(label)

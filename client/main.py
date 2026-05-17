@@ -68,7 +68,7 @@ def main():
 
     from client.main_window import MainWindow
     window = MainWindow()
-    window.show()
+    window.showFullScreen()
 
     logger.info("Qt event loop started")
     exit_code = app.exec()
