@@ -21,6 +21,7 @@ PAGE_LOGIN   = 1
 PAGE_SIGNUP  = 2
 PAGE_STUDENT_DASHBOARD = 3
 PAGE_EXAMINER_DASHBOARD = 4
+PAGE_EXAMS = 5
 
 
 class MainWindow(QMainWindow):
@@ -39,9 +40,15 @@ class MainWindow(QMainWindow):
         self._active_exam_window = None
         self._active_role: Optional[str] = None
 
-        # Lazily built on first login for each role
+        # Auth/session state
+        self._auth_token: Optional[str] = None
+        self._active_user_id: Optional[str] = None
+        self._active_full_name: Optional[str] = None
+
+        # Lazily built on first login/navigation
         self._student_dashboard  = None
         self._examiner_dashboard = None
+        self._exams_page = None
 
         self._stack = QStackedWidget()
         self.setCentralWidget(self._stack)
@@ -81,14 +88,16 @@ class MainWindow(QMainWindow):
         self._signup_ctrl.signup_complete.connect(self._on_signup_complete)
         self._stack.addWidget(self._signup_ui)
 
-        # Pages 3 & 4 — Dashboards: lightweight placeholders only.
-        # Real widgets are built on first login for each role (_build_student_dashboard /
-        # _build_examiner_dashboard) so startup never pays their construction cost.
+        # Pages 3, 4 & 5 — lazy placeholders only.
+        # Real widgets are built only when needed.
         self._student_placeholder  = QWidget()
         self._examiner_placeholder = QWidget()
+        self._exams_placeholder    = QWidget()
+
         self._stack.addWidget(self._student_placeholder)   # index 3
         self._stack.addWidget(self._examiner_placeholder)  # index 4
-
+        self._stack.addWidget(self._exams_placeholder)     # index 5
+        
     def _build_student_dashboard(self):
         from client.dashboard.views.dashboard_page import DashboardPage
         # Or use the real project path, for example:
@@ -117,6 +126,37 @@ class MainWindow(QMainWindow):
             self._stack.removeWidget(ph)
             ph.deleteLater()
         self._examiner_placeholder = None
+        
+    def _build_exams_page(self):
+        from client.exam.views.exams_page import ExamsPage
+        from client.exam.services.api_client import ApiClient
+
+        if not self._auth_token:
+            logger.warning("Cannot build ExamsPage without auth token")
+            return
+
+        api = ApiClient(
+            base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
+            access_token=self._auth_token,
+        )
+
+        self._exams_page = ExamsPage(api=api)
+
+        # Sidebar navigation from ExamsPage should come back to MainWindow.
+        self._exams_page.nav_requested.connect(self._on_dashboard_nav_requested)
+
+        # Check-in navigation is not fully wired yet, but connect it so clicks are not lost.
+        self._exams_page.check_in_navigated.connect(self._on_exam_check_in_requested)
+
+        # Replace placeholder at index 5 without disturbing other indices.
+        self._stack.insertWidget(PAGE_EXAMS, self._exams_page)
+
+        ph = self._exams_placeholder
+        if ph is not None:
+            self._stack.removeWidget(ph)
+            ph.deleteLater()
+
+        self._exams_placeholder = None
 
     # ── Navigation ─────────────────────────────────────────────────────────
 
@@ -187,8 +227,11 @@ class MainWindow(QMainWindow):
     ):
         logger.info("Login successful — %s (%s)", full_name, role)
         self._login_ui.set_loading(False)
-        self._active_role = role
-        
+
+        self._auth_token = token
+        self._active_user_id = user_id
+        self._active_full_name = full_name
+
         role_key = str(role).strip().lower()
         self._active_role = role_key
 
@@ -217,6 +260,27 @@ class MainWindow(QMainWindow):
             return
 
         self._login_ui.set_status(f"✓ Welcome {full_name}!", "success")
+        
+    def _on_exam_check_in_requested(self, exam_id: str) -> None:
+        """
+        Temporary handler for ExamsPage check-in button.
+
+        Later this should:
+        1. call ApiClient.start_session(exam_id)
+        2. run face/check-in flow
+        3. load questions
+        4. call _on_start_exam_requested(...)
+        """
+        logger.info("Check-in requested for exam_id=%s", exam_id)
+
+        from client.Shared.info_dialog import InfoDialog
+
+        dlg = InfoDialog(
+            title="Check-In",
+            body="Check-in navigation is connected, but the check-in/start flow is not wired yet.",
+            parent=self,
+        )
+        dlg.exec_()
 
     def _on_start_exam_requested(self, session: dict, exam: dict, questions: list, token: str):
         from client.modules.exam_engine.exam_window import ExamWindow
@@ -244,7 +308,7 @@ class MainWindow(QMainWindow):
             # verification failure) the stack's current widget may not compare equal to
             # exam_page even though the exam is still the visible page — skipping the switch
             # then removeWidget() left the stack in an invalid state and the app could exit.
-            self._stack.setCurrentIndex(PAGE_STUDENT_DASHBOARD)
+            self._stack.setCurrentIndex(PAGE_EXAMS if self._exams_page is not None else PAGE_STUDENT_DASHBOARD)
             index = self._stack.indexOf(exam_page)
             if index != -1:
                 self._stack.removeWidget(exam_page)
@@ -254,9 +318,11 @@ class MainWindow(QMainWindow):
             self.showFullScreen()
             self.raise_()
             self.activateWindow()
-            if self._student_dashboard is not None:
+            if self._exams_page is not None:
+                self._exams_page.refresh_data()
+            elif self._student_dashboard is not None:
                 self._student_dashboard.refresh_data()
-
+                
         exam_page.finished.connect(_on_exam_finished)
         self._stack.addWidget(exam_page)
         self._nav_spinner.show()
@@ -288,20 +354,27 @@ class MainWindow(QMainWindow):
     def _on_dashboard_nav_requested(self, label: str) -> None:
         key = label.strip().lower()
 
-        routes = {
-            "dashboard": PAGE_STUDENT_DASHBOARD,
-            "home": PAGE_STUDENT_DASHBOARD,
+        # Dashboard / Home
+        if key in {"dashboard", "home"}:
+            self._navigate_to(PAGE_STUDENT_DASHBOARD)
+            return
 
-            # Later, when you create these pages:
-            # "exams": PAGE_EXAMS,
-            # "results": PAGE_RESULTS,
-            # "settings": PAGE_SETTINGS,
-        }
+        # Exams page
+        if key in {"exams", "my exams", "assessments"}:
+            if self._exams_page is None:
+                self._build_exams_page()
 
-        page_index = routes.get(key)
+            if self._exams_page is None:
+                logger.warning("Exams page could not be built")
+                return
 
-        if page_index is not None:
-            self._navigate_to(page_index)
+            # Refresh each time user opens Exams, so pending requests/upcoming exams stay current.
+            try:
+                self._exams_page.refresh_data()
+            except Exception as exc:
+                logger.warning("Could not refresh Exams page: %s", exc)
+
+            self._navigate_to(PAGE_EXAMS)
             return
 
         # Page does not exist yet, so keep showing the same dashboard-style dialog.

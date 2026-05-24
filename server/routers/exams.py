@@ -25,10 +25,11 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from sqlalchemy import or_
 from pydantic import BaseModel
 
 from server.database import get_db
-from server.models.models import Class, Enrollment, Exam, Question, User, ExamSession
+from server.models.models import Class, Enrollment, Exam, Question, User, ExamSession, ExamAccessRequest
 from server.dependencies import get_current_user, require_examiner, require_student
 from shared.constants import ExamStatus, QuestionType, Role
 
@@ -72,6 +73,32 @@ class ExamStatusUpdate(BaseModel):
 def generate_join_code(length: int = 6) -> str:
     return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
 
+def generate_unique_exam_join_code(db: Session, length: int = 6) -> str:
+    code = generate_join_code(length)
+
+    while db.query(Exam).filter(Exam.join_code == code).first():
+        code = generate_join_code(length)
+
+    return code
+
+def serialize_exam_access_request(req: ExamAccessRequest) -> dict:
+    exam = req.exam
+
+    return {
+        "request_id": req.id,
+        "exam_id": req.exam_id,
+        "exam_name": exam.title if exam else "Unknown exam",
+        "request_date": req.requested_at.isoformat() if req.requested_at else None,
+        "status": "Approved" if req.approved else "Awaiting Approval",
+
+        # Extra raw fields for future screens/debugging
+        "approved": req.approved,
+        "requested_at": req.requested_at.isoformat() if req.requested_at else None,
+        "class_id": exam.class_id if exam else None,
+        "scheduled_start": exam.scheduled_start.isoformat() if exam and exam.scheduled_start else None,
+        "scheduled_end": exam.scheduled_end.isoformat() if exam and exam.scheduled_end else None,
+    }
+
 def serialize_student_exam(e: Exam) -> dict:
     return {
         "id": e.id,
@@ -90,6 +117,33 @@ def serialize_student_exam(e: Exam) -> dict:
 
         "exam_type": "Proctored" if e.require_liveness_check else "Open Book",
     }
+    
+def get_student_access_ids(
+    current_user: User,
+    db: Session,
+) -> tuple[set[str], set[str]]:
+    """
+    Returns:
+      approved_class_ids — classes student is approved in
+      approved_exam_ids  — exams student has direct approved access to
+    """
+    approved_class_ids = {
+        e.class_id
+        for e in db.query(Enrollment).filter(
+            Enrollment.student_id == current_user.id,
+            Enrollment.approved == True,
+        ).all()
+    }
+
+    approved_exam_ids = {
+        r.exam_id
+        for r in db.query(ExamAccessRequest).filter(
+            ExamAccessRequest.student_id == current_user.id,
+            ExamAccessRequest.approved == True,
+        ).all()
+    }
+
+    return approved_class_ids, approved_exam_ids
 
 # ── Class Routes ───────────────────────────────────────────────────────────
 
@@ -387,10 +441,12 @@ def create_exam(
     ).first()
     if not class_:
         raise HTTPException(status_code=404, detail="Class not found or not yours")
+    join_code = generate_unique_exam_join_code(db)
 
     exam = Exam(
         class_id=req.class_id,
         creator_id=current_user.id,
+        join_code=join_code,
         title=req.title,
         description=req.description,
         duration_minutes=req.duration_minutes,
@@ -406,10 +462,15 @@ def create_exam(
     db.commit()
     db.refresh(exam)
     return {
-        "exam_id": exam.id,
-        "title": exam.title,
-        "status": exam.status.value if hasattr(exam.status, "value") else str(exam.status),
-    }
+    "exam_id": exam.id,
+    "class_id": exam.class_id,
+    "join_code": exam.join_code,
+    "title": exam.title,
+    "status": exam.status.value if hasattr(exam.status, "value") else str(exam.status),
+    "duration_minutes": exam.duration_minutes,
+    "scheduled_start": exam.scheduled_start,
+    "scheduled_end": exam.scheduled_end,
+}
 
 
 @router.get("/exams")
@@ -420,36 +481,61 @@ def list_student_exams(
 ):
     """
     Student-visible exam listing.
-    If class_id is provided, return exams for that approved class only.
-    Otherwise return exams across all approved classes.
-    """
-    approved_enrollments = db.query(Enrollment).filter(
-        Enrollment.student_id == current_user.id,
-        Enrollment.approved == True,
-    ).all()
 
-    approved_class_ids = {e.class_id for e in approved_enrollments}
+    Supports both:
+      1. Old access model: approved class enrollment
+      2. New access model: approved direct exam access request
+    """
+    approved_class_ids, approved_exam_ids = get_student_access_ids(current_user, db)
 
     if class_id:
-        if class_id not in approved_class_ids:
-            raise HTTPException(status_code=403, detail="Not enrolled in this class")
+        # If student is approved in the whole class, show all exams in that class.
+        if class_id in approved_class_ids:
+            exams = (
+                db.query(Exam)
+                .filter(Exam.class_id == class_id)
+                .order_by(Exam.scheduled_start.asc())
+                .all()
+            )
+            return [serialize_student_exam(e) for e in exams]
 
-        exams = (
-            db.query(Exam)
-            .filter(Exam.class_id == class_id)
-            .order_by(Exam.scheduled_start.asc())
-            .all()
-        )
-    else:
-        if not approved_class_ids:
-            return []
+        # Otherwise, show only directly approved exams from this class.
+        if approved_exam_ids:
+            exams = (
+                db.query(Exam)
+                .filter(
+                    Exam.class_id == class_id,
+                    Exam.id.in_(approved_exam_ids),
+                )
+                .order_by(Exam.scheduled_start.asc())
+                .all()
+            )
 
-        exams = (
-            db.query(Exam)
-            .filter(Exam.class_id.in_(approved_class_ids))
-            .order_by(Exam.scheduled_start.asc())
-            .all()
+            if exams:
+                return [serialize_student_exam(e) for e in exams]
+
+        raise HTTPException(
+            status_code=403,
+            detail="You do not have approved access to exams in this class.",
         )
+
+    if not approved_class_ids and not approved_exam_ids:
+        return []
+
+    access_filters = []
+
+    if approved_class_ids:
+        access_filters.append(Exam.class_id.in_(approved_class_ids))
+
+    if approved_exam_ids:
+        access_filters.append(Exam.id.in_(approved_exam_ids))
+
+    exams = (
+        db.query(Exam)
+        .filter(or_(*access_filters))
+        .order_by(Exam.scheduled_start.asc())
+        .all()
+    )
 
     return [serialize_student_exam(e) for e in exams]
 
@@ -461,25 +547,30 @@ def list_upcoming_assessments(
 ):
     """
     Upcoming assessments for the authenticated student.
-    Returns future scheduled exams across approved classes.
-    """
-    approved_class_ids = [
-        e.class_id
-        for e in db.query(Enrollment).filter(
-            Enrollment.student_id == current_user.id,
-            Enrollment.approved == True,
-        ).all()
-    ]
 
-    if not approved_class_ids:
+    Supports both:
+      1. Approved class enrollment
+      2. Approved direct exam access
+    """
+    approved_class_ids, approved_exam_ids = get_student_access_ids(current_user, db)
+
+    if not approved_class_ids and not approved_exam_ids:
         return []
+
+    access_filters = []
+
+    if approved_class_ids:
+        access_filters.append(Exam.class_id.in_(approved_class_ids))
+
+    if approved_exam_ids:
+        access_filters.append(Exam.id.in_(approved_exam_ids))
 
     now = datetime.utcnow()
 
     exams = (
         db.query(Exam)
         .filter(
-            Exam.class_id.in_(approved_class_ids),
+            or_(*access_filters),
             Exam.scheduled_start.isnot(None),
             Exam.scheduled_start >= now,
         )
@@ -497,24 +588,30 @@ def get_next_exam(
 ):
     """
     Next immediate upcoming exam for the authenticated student.
-    """
-    approved_class_ids = [
-        e.class_id
-        for e in db.query(Enrollment).filter(
-            Enrollment.student_id == current_user.id,
-            Enrollment.approved == True,
-        ).all()
-    ]
 
-    if not approved_class_ids:
+    Supports both:
+      1. Approved class enrollment
+      2. Approved direct exam access
+    """
+    approved_class_ids, approved_exam_ids = get_student_access_ids(current_user, db)
+
+    if not approved_class_ids and not approved_exam_ids:
         return None
+
+    access_filters = []
+
+    if approved_class_ids:
+        access_filters.append(Exam.class_id.in_(approved_class_ids))
+
+    if approved_exam_ids:
+        access_filters.append(Exam.id.in_(approved_exam_ids))
 
     now = datetime.utcnow()
 
     exam = (
         db.query(Exam)
         .filter(
-            Exam.class_id.in_(approved_class_ids),
+            or_(*access_filters),
             Exam.scheduled_start.isnot(None),
             Exam.scheduled_start >= now,
         )
@@ -563,6 +660,73 @@ def list_examiner_exams(
         )
     return rows
 
+@router.get("/exams/access-requests/me")
+def get_my_exam_access_requests(
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Student views their exam-level access requests.
+    Used by the Exams page pending requests panel.
+    """
+    requests = (
+        db.query(ExamAccessRequest)
+        .join(Exam, Exam.id == ExamAccessRequest.exam_id)
+        .filter(ExamAccessRequest.student_id == current_user.id)
+        .order_by(ExamAccessRequest.requested_at.desc())
+        .all()
+    )
+
+    return [serialize_exam_access_request(r) for r in requests]
+
+@router.post("/exams/join-by-code/{code}", status_code=201)
+def join_exam_by_code(
+    code: str,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Student requests access to an exam using the exam join code.
+    Creates a pending exam-level access request.
+    """
+    normalized_code = code.strip().upper()
+
+    exam = db.query(Exam).filter(Exam.join_code == normalized_code).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Invalid exam join code")
+
+    existing = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.student_id == current_user.id,
+        ExamAccessRequest.exam_id == exam.id,
+    ).first()
+
+    if existing:
+        raise HTTPException(
+            status_code=409,
+            detail="You have already requested access to this exam.",
+        )
+
+    access_request = ExamAccessRequest(
+        student_id=current_user.id,
+        exam_id=exam.id,
+        approved=False,
+    )
+
+    db.add(access_request)
+    db.commit()
+    db.refresh(access_request)
+
+    return {
+        "request_id": access_request.id,
+        "exam_id": exam.id,
+        "exam_name": exam.title,
+        "request_date": access_request.requested_at.isoformat(),
+        "status": "Awaiting Approval",
+
+        "approved": access_request.approved,
+        "requested_at": access_request.requested_at.isoformat(),
+        "message": "Exam access request submitted. Awaiting examiner approval.",
+    }
 
 @router.get("/exams/{exam_id}")
 def get_exam(
@@ -793,3 +957,147 @@ def list_recent_results(
         }
         for s in sessions
     ]
+
+@router.delete("/exams/access-requests/{request_id}")
+def cancel_my_exam_access_request(
+    request_id: str,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Student cancels their own pending exam access request.
+    Approved requests should not be deleted from the student side.
+    """
+    access_request = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.id == request_id,
+        ExamAccessRequest.student_id == current_user.id,
+    ).first()
+
+    if not access_request:
+        raise HTTPException(status_code=404, detail="Access request not found")
+
+    if access_request.approved:
+        raise HTTPException(
+            status_code=400,
+            detail="Approved exam access cannot be cancelled from this page.",
+        )
+
+    db.delete(access_request)
+    db.commit()
+
+    return {
+        "message": "Exam access request cancelled.",
+        "request_id": request_id,
+    }
+
+@router.get("/exams/{exam_id}/access-requests")
+def get_exam_access_requests(
+    exam_id: str,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner views all access requests for one of their exams.
+    """
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+
+    requests = (
+        db.query(ExamAccessRequest)
+        .filter(ExamAccessRequest.exam_id == exam_id)
+        .order_by(ExamAccessRequest.requested_at.desc())
+        .all()
+    )
+
+    return [
+        {
+            "request_id": r.id,
+            "exam_id": r.exam_id,
+            "student_id": r.student_id,
+            "student_name": r.student.full_name if r.student else None,
+            "student_email": r.student.email if r.student else None,
+            "approved": r.approved,
+            "status": "Approved" if r.approved else "Awaiting Approval",
+            "requested_at": r.requested_at,
+        }
+        for r in requests
+    ]
+
+@router.put("/exams/{exam_id}/access-requests/{request_id}/approve")
+def approve_exam_access_request(
+    exam_id: str,
+    request_id: str,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner approves a student's exam-level access request.
+    """
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+
+    access_request = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.id == request_id,
+        ExamAccessRequest.exam_id == exam_id,
+    ).first()
+
+    if not access_request:
+        raise HTTPException(status_code=404, detail="Access request not found")
+
+    access_request.approved = True
+    db.commit()
+    db.refresh(access_request)
+
+    return {
+        "message": "Exam access request approved.",
+        "request_id": access_request.id,
+        "exam_id": exam_id,
+        "student_id": access_request.student_id,
+        "approved": access_request.approved,
+        "status": "Approved",
+    }
+    
+@router.put("/exams/{exam_id}/access-requests/{request_id}/reject")
+def reject_exam_access_request(
+    exam_id: str,
+    request_id: str,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner rejects/removes a student's exam-level access request.
+    """
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+
+    access_request = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.id == request_id,
+        ExamAccessRequest.exam_id == exam_id,
+    ).first()
+
+    if not access_request:
+        raise HTTPException(status_code=404, detail="Access request not found")
+
+    db.delete(access_request)
+    db.commit()
+
+    return {
+        "message": "Exam access request rejected and removed.",
+        "request_id": request_id,
+        "exam_id": exam_id,
+    }

@@ -58,6 +58,7 @@ class User(Base):
     enrollments   = relationship("Enrollment",  back_populates="student")
     exam_sessions = relationship("ExamSession", back_populates="student")
     created_exams = relationship("Exam",        back_populates="creator")
+    exam_access_requests = relationship("ExamAccessRequest", back_populates="student",)
 
     @property
     def full_name(self) -> str:
@@ -108,10 +109,10 @@ class Exam(Base):
     title:                       Mapped[str]            = mapped_column(String, nullable=False)
     description:                 Mapped[Optional[str]]  = mapped_column(Text,   nullable=True)
     status:                      Mapped[ExamStatus]     = mapped_column(SAEnum(ExamStatus), default=ExamStatus.DRAFT)
+    join_code:                   Mapped[str]            = mapped_column(String, unique=True, nullable=False,index=True)
     duration_minutes:            Mapped[int]            = mapped_column(Integer, nullable=False)
     scheduled_start:             Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     scheduled_end:               Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
-
     # Proctoring config
     max_window_switches:         Mapped[int]  = mapped_column(Integer, default=3)
     max_face_absent_seconds:     Mapped[int]  = mapped_column(Integer, default=10)
@@ -125,6 +126,18 @@ class Exam(Base):
     creator   = relationship("User",  back_populates="created_exams")
     questions = relationship("Question",    back_populates="exam", order_by="Question.order_index")
     sessions  = relationship("ExamSession", back_populates="exam")
+    access_requests = relationship("ExamAccessRequest",back_populates="exam")
+
+class ExamAccessRequest(Base):
+    __tablename__ = "exam_access_requests"
+    id:               Mapped[str]      = mapped_column(String, primary_key=True, default=gen_uuid)
+    student_id:       Mapped[str]      = mapped_column(String, ForeignKey("users.id"), nullable=False, index=True)
+    exam_id:          Mapped[str]      = mapped_column(String, ForeignKey("exams.id"), nullable=False, index=True)
+    approved:         Mapped[bool]     = mapped_column(Boolean, default=False)
+    requested_at:     Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    student = relationship("User", back_populates="exam_access_requests")
+    exam = relationship("Exam", back_populates="access_requests")
 
 
 class Question(Base):
