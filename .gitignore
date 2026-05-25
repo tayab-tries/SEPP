@@ -29,3 +29,7 @@ htmlcov/
 client/venv/
 server/venv/
 *.zip
+
+client/venv/
+server/venv/
+*.zip
