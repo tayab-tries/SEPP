@@ -16,11 +16,11 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from pydantic import BaseModel
 
 from server.database import get_db
-from server.models.models import Exam, ExamSession, Enrollment, Answer, Question, Class, ProctoringEvent
+from server.models.models import Exam, ExamSession, Enrollment, Answer, Question, Class, ProctoringEvent, ExamAccessRequest
 from server.dependencies import get_current_user, require_examiner, require_student
 from server.models.models import User
 from server.services.integrity import (
@@ -60,7 +60,7 @@ def start_session(
 
     Checks:
     1. Exam exists and is LIVE
-    2. Student is enrolled and approved in the exam's class
+    2. Student has approved access through class enrollment or direct exam access
     3. Student doesn't already have an active session for this exam
     4. Student has face enrolled (required for proctoring)
     """
@@ -74,16 +74,33 @@ def start_session(
             detail=f"Exam is not live. Current status: {exam.status}",
         )
 
-    # 2. Student must be enrolled and approved
-    enrollment = db.query(Enrollment).filter(
+    question_count = db.query(Question).filter(Question.exam_id == exam.id).count()
+    if question_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="This exam cannot be started because it has no questions yet.",
+        )
+
+    # 2. Student must have approved access
+    # Access can come from:
+    #   A) approved enrollment in the exam's class
+    #   B) approved direct access request for this exam
+    approved_class_enrollment = db.query(Enrollment).filter(
         Enrollment.student_id == current_user.id,
         Enrollment.class_id == exam.class_id,
         Enrollment.approved == True,
     ).first()
-    if not enrollment:
+
+    approved_exam_access = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.student_id == current_user.id,
+        ExamAccessRequest.exam_id == exam.id,
+        ExamAccessRequest.approved == True,
+    ).first()
+
+    if not approved_class_enrollment and not approved_exam_access:
         raise HTTPException(
             status_code=403,
-            detail="You are not enrolled in this exam's class or your enrollment is pending approval.",
+            detail="You do not have approved access to this exam.",
         )
 
     # 3. Check for existing session

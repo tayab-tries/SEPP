@@ -241,9 +241,6 @@ class SidebarWidget(QWidget):
         return btn
 
     def _on_item_clicked(self, label: str) -> None:
-        self.set_active_label(label)
-        self.nav_clicked.emit(label)
-
-    def set_active_label(self, label: str) -> None:
         for item in self._nav_items:
             item.set_active(item._label == label)
+        self.nav_clicked.emit(label)

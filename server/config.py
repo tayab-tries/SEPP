@@ -1,3 +1,4 @@
+from pydantic import field_validator
 from pydantic_settings import BaseSettings
 from functools import lru_cache
 
@@ -28,8 +29,21 @@ class Settings(BaseSettings):
     # When true, background loop promotes SCHEDULED exams to LIVE once scheduled_start passes (UTC).
     EXAM_AUTO_SCHEDULER: bool = False
 
+    @field_validator("DEBUG", "EXAM_AUTO_SCHEDULER", mode="before")
+    @classmethod
+    def _coerce_boolish(cls, value):
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "on", "debug", "development", "dev"}:
+                return True
+            if normalized in {"0", "false", "no", "off", "release", "prod", "production"}:
+                return False
+        return value
+
     class Config:
-        env_file = ".env"
+        env_file = (".env", "server/.env")
         case_sensitive = True
 
 

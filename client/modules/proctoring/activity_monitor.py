@@ -20,19 +20,35 @@ Optimizations implemented:
 import ctypes
 import ctypes.wintypes
 import logging
-import psutil
+import os
 import threading
 import time
 from datetime import datetime
 from typing import Callable, Optional
 
-import win32api
-import win32gui
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional runtime dependency
+    psutil = None
+
+try:
+    import win32api
+    import win32gui
+except ImportError:  # pragma: no cover - non-Windows runtime
+    win32api = None
+    win32gui = None
 
 from shared.constants import EventType, EventSeverity
 from client.modules.proctoring.event_logger import ProctoringEvent
 
 logger = logging.getLogger(__name__)
+
+WINDOWS_NATIVE_SUPPORT = (
+    os.name == "nt"
+    and win32api is not None
+    and win32gui is not None
+)
+PROCESS_SCAN_SUPPORT = psutil is not None
 
 # ── Prohibited processes ───────────────────────────────────────────────────
 PROHIBITED_PROCESSES = {
@@ -93,21 +109,32 @@ class ActivityMonitor:
         self._monitor_bounds = self._get_monitor_bounds()
 
         # Safe initialization — GetClipboardSequenceNumber can fail
-        try:
-            self._last_clipboard_seq = win32api.GetClipboardSequenceNumber() # type: ignore[attr-defined]
-        except Exception:
+        if WINDOWS_NATIVE_SUPPORT:
+            try:
+                self._last_clipboard_seq = win32api.GetClipboardSequenceNumber() # type: ignore[attr-defined]
+            except Exception:
+                self._last_clipboard_seq = 0
+        else:
             self._last_clipboard_seq = 0
 
     # ── Lifecycle ──────────────────────────────────────────────────────────
 
     def start(self):
         self._running = True
-        checks = [
-            ("WindowWatcher",    self._window_watcher),
-            ("CursorWatcher",    self._cursor_watcher),
-            ("ProcessScanner",   self._process_scanner),
-            ("ClipboardWatcher", self._clipboard_watcher),
-        ]
+        checks = []
+        if WINDOWS_NATIVE_SUPPORT:
+            checks.extend([
+                ("WindowWatcher",    self._window_watcher),
+                ("CursorWatcher",    self._cursor_watcher),
+                ("ClipboardWatcher", self._clipboard_watcher),
+            ])
+        if PROCESS_SCAN_SUPPORT:
+            checks.append(("ProcessScanner", self._process_scanner))
+        if not checks:
+            logger.warning(
+                "ActivityMonitor disabled: Windows native APIs and psutil are unavailable on this runtime."
+            )
+            return
         for name, fn in checks:
             t = threading.Thread(target=fn, daemon=True, name=name)
             t.start()
@@ -126,6 +153,9 @@ class ActivityMonitor:
 
     def _get_monitor_bounds(self) -> list[dict]:
         """Return bounding boxes for all connected monitors."""
+        if not WINDOWS_NATIVE_SUPPORT:
+            return [{"left": 0, "top": 0, "right": 1920, "bottom": 1080, "primary": True}]
+
         monitors: list[dict] = []
 
         def callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
@@ -174,6 +204,8 @@ class ActivityMonitor:
         Poll foreground window title every second.
         Flag if focus leaves the exam window.
         """
+        if not WINDOWS_NATIVE_SUPPORT:
+            return
         while self._running:
             try:
                 hwnd  = win32gui.GetForegroundWindow()
@@ -200,6 +232,9 @@ class ActivityMonitor:
         Requires cursor to stay off-primary for >1s before flagging
         to avoid false positives from quick cursor movements.
         """
+        if not WINDOWS_NATIVE_SUPPORT:
+            return
+
         if len(self._monitor_bounds) < 2:
             logger.info("Single monitor detected — cursor watcher inactive")
             return
@@ -246,6 +281,9 @@ class ActivityMonitor:
         This ensures fast re-detection if a student tries to restart
         a prohibited app after being caught.
         """
+        if not PROCESS_SCAN_SUPPORT:
+            return
+
         last_violation_time: Optional[datetime] = None
 
         while self._running:
@@ -287,6 +325,8 @@ class ActivityMonitor:
         The sequence number increments on every clipboard write —
         cheap, reliable, no need to read clipboard content.
         """
+        if not WINDOWS_NATIVE_SUPPORT:
+            return
         while self._running:
             try:
                 seq = win32api.GetClipboardSequenceNumber() # type: ignore[attr-defined]
@@ -314,6 +354,9 @@ def detect_virtual_machine() -> tuple[bool, list[str]]:
     If VM is detected the exam_window should emit VM_DETECTED event
     and block the student from proceeding.
     """
+    if os.name != "nt":
+        return False, []
+
     indicators: list[str] = []
 
     try:
