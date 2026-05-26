@@ -140,6 +140,17 @@ class UpcomingExamsPanel(QWidget):
             card.setParent(None)
             card.deleteLater()
         self._cards.clear()
+        while True:
+            item = self._inner_lay.takeAt(0)
+            if item is None:
+                break
+            widget = item.widget()
+            spacer = item.spacerItem()
+            if widget is not None:
+                widget.deleteLater()
+            if spacer is not None:
+                continue
+        self._inner_lay.addStretch()
 
     def _add_card(self, data: dict) -> None:
         card = ExamCardWidget()

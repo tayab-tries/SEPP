@@ -25,3 +25,15 @@ htmlcov/
 .cursor/
 *.db
 .vscode/
+
+client/venv/
+server/venv/
+*.zip
+
+client/venv/
+server/venv/
+*.zip
+
+client/venv/
+server/venv/
+*.zip

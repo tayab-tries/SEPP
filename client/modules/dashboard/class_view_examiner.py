@@ -53,7 +53,7 @@ class ExaminerClassView(QWidget):
         root.setSpacing(12)
 
         top = QHBoxLayout()
-        back = QPushButton("Back to Classes")
+        back = QPushButton("Back")
         back.clicked.connect(self.back_requested.emit)
         create_exam = QPushButton("Create New Exam")
         create_exam.clicked.connect(lambda: self.create_exam_requested.emit(self._class_payload))
@@ -68,7 +68,7 @@ class ExaminerClassView(QWidget):
         details_col = QVBoxLayout(details_card)
         details_col.setContentsMargins(18, 18, 18, 18)
 
-        heading = QLabel("Class Details")
+        heading = QLabel("Exam Group Details")
         heading.setObjectName("sectionHeading")
         self._class_name.setObjectName("subtitleLabel")
         self._class_code.setObjectName("subtitleLabel")
@@ -86,7 +86,7 @@ class ExaminerClassView(QWidget):
         self._apply_shadow(enrollments_card)
         enrollments_col = QVBoxLayout(enrollments_card)
         enrollments_col.setContentsMargins(18, 18, 18, 18)
-        enrollments_head = QLabel("Student enrollments")
+        enrollments_head = QLabel("Enrollment Requests")
         enrollments_head.setObjectName("sectionHeading")
         enrollments_col.addWidget(enrollments_head)
         enrollments_col.addWidget(self._refresh_enrollments_btn)
@@ -107,7 +107,7 @@ class ExaminerClassView(QWidget):
         self._apply_shadow(exams_card)
         exams_col = QVBoxLayout(exams_card)
         exams_col.setContentsMargins(18, 18, 18, 18)
-        exams_head = QLabel("Exams in this class")
+        exams_head = QLabel("Exams")
         exams_head.setObjectName("sectionHeading")
         self._exams_list.setObjectName("examsList")
         self._refresh_exams_btn.clicked.connect(self.refresh_exams_requested.emit)
@@ -140,8 +140,8 @@ class ExaminerClassView(QWidget):
 
     def set_class_payload(self, payload: dict):
         self._class_payload = dict(payload or {})
-        self._class_name.setText(f"Class: {self._class_payload.get('name', 'Unknown')}")
-        self._class_code.setText(f"Join Code: {self._class_payload.get('join_code', 'N/A')}")
+        self._class_name.setText(f"Group: {self._class_payload.get('name', 'Unknown')}")
+        self._class_code.setText(f"Legacy Code: {self._class_payload.get('join_code', 'N/A')}")
         self._class_desc.setText(
             f"Description: {self._class_payload.get('description') or 'No description provided.'}"
         )

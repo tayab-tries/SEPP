@@ -148,6 +148,11 @@ class PendingRequestsPanel(QWidget):
         self._state_lbl.setText("Loading…")
         self._state_lbl.show()
 
+    def set_error(self, message: str) -> None:
+        self._clear_all()
+        self._state_lbl.setText(f"Could not load requests: {message}")
+        self._state_lbl.show()
+
     def set_requests(self, requests: list[dict]) -> None:
         self._clear_all()
         for data in requests:

@@ -74,6 +74,13 @@ def start_session(
             detail=f"Exam is not live. Current status: {exam.status}",
         )
 
+    question_count = db.query(Question).filter(Question.exam_id == exam.id).count()
+    if question_count == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="This exam cannot be started because it has no questions yet.",
+        )
+
     # 2. Student must have approved access
     # Access can come from:
     #   A) approved enrollment in the exam's class

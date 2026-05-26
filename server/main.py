@@ -53,10 +53,13 @@ def _ensure_dev_schema():
     if "answers" not in inspector.get_table_names():
         return
     answer_columns = {column["name"] for column in inspector.get_columns("answers")}
-    if "examiner_comment" in answer_columns:
-        return
     with engine.begin() as conn:
-        conn.execute(text("ALTER TABLE answers ADD COLUMN examiner_comment TEXT"))
+        if "examiner_comment" not in answer_columns:
+            conn.execute(text("ALTER TABLE answers ADD COLUMN examiner_comment TEXT"))
+        if "exams" in inspector.get_table_names():
+            exam_columns = {column["name"] for column in inspector.get_columns("exams")}
+            if "join_code" not in exam_columns:
+                conn.execute(text("ALTER TABLE exams ADD COLUMN join_code VARCHAR"))
 
 
 async def heartbeat_monitor():

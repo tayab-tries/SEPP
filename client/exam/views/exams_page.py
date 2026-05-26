@@ -6,7 +6,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QSizePolicy,
 )
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QCursor
 
 from client.exam.services.api_client import ApiClient
@@ -108,25 +108,34 @@ class ExamsPage(QWidget):
     nav_requested      = Signal(str)   # label  → MainWindow
     check_in_navigated = Signal(str)   # exam_id → MainWindow
 
+    AUTO_REFRESH_MS = 10_000
+
     def __init__(
         self,
         api: ApiClient,
+        auto_refresh_ms: int | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._api = api
         self._workers: list[ApiWorker] = []
+        self._load_jobs_remaining = 0
+        self._load_refresh_pending = False
 
         # Exam data cache keyed by exam_id — populated when upcoming exams load.
         # Used to serve ViewDetailsDialog without an extra round-trip.
         self._exam_cache: dict[str, dict] = {}
+        self._auto_refresh_timer = QTimer(self)
+        self._auto_refresh_timer.setInterval(auto_refresh_ms or self.AUTO_REFRESH_MS)
+        self._auto_refresh_timer.timeout.connect(self._on_auto_refresh_tick)
 
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {MAIN_BG};")
 
         self._build_ui()
         self._wire_signals()
-        self._load_page_data()
+        self._load_page_data(show_loading=True)
+        self._auto_refresh_timer.start()
 
     # ── UI assembly ───────────────────────────────────────────────────────────
 
@@ -284,24 +293,44 @@ class ExamsPage(QWidget):
         self._join_widget.reset()
 
     def _on_join_error(self, message: str) -> None:
-        self._join_widget.set_error("Invalid access code. Please try again.")
+        self._join_widget.set_error(message or "Could not submit access request.")
 
     # ── Data loading ──────────────────────────────────────────────────────────
 
-    def _load_page_data(self) -> None:
-        self._upcoming_panel.set_loading()
-        self._pending_panel.set_loading()
+    def _load_page_data(self, *, show_loading: bool) -> None:
+        if self._load_jobs_remaining > 0:
+            self._load_refresh_pending = True
+            return
+
+        self._load_refresh_pending = False
+        self._load_jobs_remaining = 2
+
+        if show_loading:
+            self._upcoming_panel.set_loading()
+            self._pending_panel.set_loading()
 
         self._run_api_job(
             self._api.get_upcoming_exams,
-            self._on_exams_loaded,
-            lambda msg: self._upcoming_panel.set_error(msg),
+            lambda exams: (
+                self._on_exams_loaded(exams),
+                self._finish_load_job(),
+            ),
+            lambda msg, replace_view=show_loading: (
+                self._upcoming_panel.set_error(msg) if replace_view else None,
+                self._finish_load_job(),
+            ),
         )
 
         self._run_api_job(
             self._api.get_pending_requests,
-            self._pending_panel.set_requests,
-            lambda msg: self._pending_panel.set_loading(),   # falls back to empty state
+            lambda requests: (
+                self._pending_panel.set_requests(requests),
+                self._finish_load_job(),
+            ),
+            lambda msg, replace_view=show_loading: (
+                self._pending_panel.set_error(msg) if replace_view else None,
+                self._finish_load_job(),
+            ),
         )
 
     def _on_exams_loaded(self, exams: list[dict]) -> None:
@@ -313,8 +342,18 @@ class ExamsPage(QWidget):
 
     def refresh_data(self) -> None:
         """Re-fetch all page data. Call when the page becomes visible."""
-        self._exam_cache.clear()
-        self._load_page_data()
+        self._load_page_data(show_loading=False)
+
+    def _finish_load_job(self) -> None:
+        if self._load_jobs_remaining > 0:
+            self._load_jobs_remaining -= 1
+        if self._load_jobs_remaining == 0 and self._load_refresh_pending:
+            QTimer.singleShot(0, self.refresh_data)
+
+    def _on_auto_refresh_tick(self) -> None:
+        if not self.isVisible():
+            return
+        self.refresh_data()
 
     # ── ApiWorker helpers (identical to DashboardPage pattern) ────────────────
 

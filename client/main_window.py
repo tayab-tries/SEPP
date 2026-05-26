@@ -8,6 +8,7 @@ import logging
 import os
 from typing import Optional
 
+import requests
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent, QCloseEvent
@@ -22,6 +23,79 @@ PAGE_SIGNUP  = 2
 PAGE_STUDENT_DASHBOARD = 3
 PAGE_EXAMINER_DASHBOARD = 4
 PAGE_EXAMS = 5
+
+
+def _extract_http_error(response: requests.Response) -> str:
+    try:
+        data = response.json()
+    except ValueError:
+        return f"Request failed with status {response.status_code}."
+
+    detail = data.get("detail")
+    if isinstance(detail, str) and detail.strip():
+        return detail
+    if isinstance(detail, list) and detail:
+        first = detail[0]
+        if isinstance(first, dict):
+            msg = first.get("msg")
+            if msg:
+                return str(msg)
+
+    return f"Request failed with status {response.status_code}."
+
+
+def _http_prepare_exam_launch(token: str, base_url: str, exam_id: str) -> dict:
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    base = base_url.rstrip("/")
+
+    try:
+        session_resp = requests.post(
+            f"{base}/sessions/start",
+            headers=headers,
+            json={"exam_id": exam_id},
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Could not start exam session: {exc}") from exc
+
+    if session_resp.status_code >= 400:
+        raise RuntimeError(_extract_http_error(session_resp))
+    session = session_resp.json()
+
+    try:
+        exam_resp = requests.get(
+            f"{base}/exams/{exam_id}",
+            headers=headers,
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Could not load exam details: {exc}") from exc
+
+    if exam_resp.status_code >= 400:
+        raise RuntimeError(_extract_http_error(exam_resp))
+    exam = exam_resp.json()
+
+    try:
+        questions_resp = requests.get(
+            f"{base}/exams/{exam_id}/questions",
+            headers=headers,
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Could not load exam questions: {exc}") from exc
+
+    if questions_resp.status_code >= 400:
+        raise RuntimeError(_extract_http_error(questions_resp))
+    questions = questions_resp.json()
+
+    return {
+        "session": session,
+        "exam": exam,
+        "questions": questions,
+    }
 
 
 class MainWindow(QMainWindow):
@@ -39,6 +113,8 @@ class MainWindow(QMainWindow):
         self._pending_page: Optional[int] = None
         self._active_exam_window = None
         self._active_role: Optional[str] = None
+        self._student_face_enrolled = False
+        self._exam_launch_worker = None
 
         # Auth/session state
         self._auth_token: Optional[str] = None
@@ -89,15 +165,13 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._signup_ui)
 
         # Pages 3, 4 & 5 — lazy placeholders only.
-        # Real widgets are built only when needed.
         self._student_placeholder  = QWidget()
         self._examiner_placeholder = QWidget()
         self._exams_placeholder    = QWidget()
-
         self._stack.addWidget(self._student_placeholder)   # index 3
         self._stack.addWidget(self._examiner_placeholder)  # index 4
         self._stack.addWidget(self._exams_placeholder)     # index 5
-        
+
     def _build_student_dashboard(self):
         from client.dashboard.views.dashboard_page import DashboardPage
         # Or use the real project path, for example:
@@ -156,6 +230,29 @@ class MainWindow(QMainWindow):
             self._stack.removeWidget(ph)
             ph.deleteLater()
 
+        self._exams_placeholder = None
+
+    def _build_exams_page(self):
+        from client.exam.views.exams_page import ExamsPage
+        from client.exam.services.api_client import ApiClient
+
+        if not self._auth_token:
+            logger.warning("Cannot build ExamsPage without auth token")
+            return
+
+        api = ApiClient(
+            base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
+            access_token=self._auth_token,
+        )
+        self._exams_page = ExamsPage(api=api)
+        self._exams_page.nav_requested.connect(self._on_dashboard_nav_requested)
+        self._exams_page.check_in_navigated.connect(self._on_exam_check_in_requested)
+        self._stack.insertWidget(PAGE_EXAMS, self._exams_page)
+
+        ph = self._exams_placeholder
+        if ph is not None:
+            self._stack.removeWidget(ph)
+            ph.deleteLater()
         self._exams_placeholder = None
 
     # ── Navigation ─────────────────────────────────────────────────────────
@@ -231,6 +328,7 @@ class MainWindow(QMainWindow):
         self._auth_token = token
         self._active_user_id = user_id
         self._active_full_name = full_name
+        self._student_face_enrolled = bool(face_enrolled)
 
         role_key = str(role).strip().lower()
         self._active_role = role_key
@@ -282,12 +380,94 @@ class MainWindow(QMainWindow):
         )
         dlg.exec_()
 
-    def _on_start_exam_requested(self, session: dict, exam: dict, questions: list, token: str):
-        from client.modules.exam_engine.exam_window import ExamWindow
+    def _on_exam_check_in_requested(self, exam_id: str) -> None:
+        logger.info("Check-in requested for exam_id=%s", exam_id)
 
+        if self._active_exam_window is not None:
+            logger.warning("Check-in requested while another exam is active")
+            return
+
+        if not self._auth_token:
+            self._show_info_dialog("Check-In", "You must be signed in to start an exam.")
+            return
+
+        if not self._student_face_enrolled:
+            self._show_info_dialog(
+                "Face Enrollment Required",
+                "You must complete face enrollment before starting an exam.",
+            )
+            return
+
+        if self._exam_launch_worker is not None and self._exam_launch_worker.isRunning():
+            logger.warning("Exam launch already in progress")
+            return
+
+        from client.core.api_worker import ApiWorker
+
+        self._nav_spinner.show()
+        self._exam_launch_worker = ApiWorker(
+            _http_prepare_exam_launch,
+            self._auth_token,
+            os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
+            exam_id,
+        )
+        self._exam_launch_worker.finished.connect(self._on_exam_launch_ready)
+        self._exam_launch_worker.errored.connect(self._on_exam_launch_error)
+        self._exam_launch_worker.finished.connect(
+            lambda _result, w=self._exam_launch_worker: self._cleanup_exam_launch_worker(w)
+        )
+        self._exam_launch_worker.errored.connect(
+            lambda _msg, w=self._exam_launch_worker: self._cleanup_exam_launch_worker(w)
+        )
+        self._exam_launch_worker.start()
+
+    def _on_exam_launch_ready(self, payload: dict) -> None:
+        self._nav_spinner.hide()
+        if not self._auth_token:
+            self._show_info_dialog("Exam Start Failed", "Your session expired. Please sign in again.")
+            return
+
+        self._on_start_exam_requested(
+            payload["session"],
+            payload["exam"],
+            payload["questions"],
+            self._auth_token,
+        )
+
+    def _on_exam_launch_error(self, message: str) -> None:
+        self._nav_spinner.hide()
+        self._show_info_dialog("Exam Start Failed", message)
+
+    def _cleanup_exam_launch_worker(self, worker) -> None:
+        if worker is None:
+            return
+        if self._exam_launch_worker is worker:
+            self._exam_launch_worker = None
+        worker.deleteLater()
+
+    def _show_info_dialog(self, title: str, body: str) -> None:
+        from client.Shared.info_dialog import InfoDialog
+
+        dlg = InfoDialog(
+            title=title,
+            body=body,
+            parent=self,
+        )
+        dlg.exec_()
+
+    def _on_start_exam_requested(self, session: dict, exam: dict, questions: list, token: str):
         if self._active_exam_window is not None:
             logger.warning("Exam launch requested while another exam is active")
             return
+
+        if not questions:
+            self._show_info_dialog(
+                "Exam Start Failed",
+                "This exam does not have any questions yet. Ask the examiner to finish configuring it before going live.",
+            )
+            return
+
+        from client.modules.exam_engine.exam_window import ExamWindow
 
         try:
             self._active_exam_window = ExamWindow(
@@ -299,6 +479,10 @@ class MainWindow(QMainWindow):
             )
         except Exception as exc:
             logger.exception("Failed to launch exam window: %s", exc)
+            self._show_info_dialog(
+                "Exam Start Failed",
+                f"The exam window could not be started.\n\n{exc}",
+            )
             return
 
         exam_page = self._active_exam_window
@@ -308,7 +492,9 @@ class MainWindow(QMainWindow):
             # verification failure) the stack's current widget may not compare equal to
             # exam_page even though the exam is still the visible page — skipping the switch
             # then removeWidget() left the stack in an invalid state and the app could exit.
-            self._stack.setCurrentIndex(PAGE_EXAMS if self._exams_page is not None else PAGE_STUDENT_DASHBOARD)
+            self._stack.setCurrentIndex(
+                PAGE_EXAMS if self._exams_page is not None else PAGE_STUDENT_DASHBOARD
+            )
             index = self._stack.indexOf(exam_page)
             if index != -1:
                 self._stack.removeWidget(exam_page)
@@ -340,6 +526,16 @@ class MainWindow(QMainWindow):
             self._signup_ctrl.reset()
         except Exception:
             pass
+        try:
+            if self._examiner_dashboard is not None:
+                self._examiner_dashboard.shutdown()
+        except Exception:
+            pass
+        try:
+            if self._exam_launch_worker is not None and self._exam_launch_worker.isRunning():
+                self._exam_launch_worker.wait(2000)
+        except Exception:
+            pass
         super().closeEvent(event)
 
     # ── Debug exit ─────────────────────────────────────────────────────────
@@ -354,26 +550,20 @@ class MainWindow(QMainWindow):
     def _on_dashboard_nav_requested(self, label: str) -> None:
         key = label.strip().lower()
 
-        # Dashboard / Home
         if key in {"dashboard", "home"}:
             self._navigate_to(PAGE_STUDENT_DASHBOARD)
             return
 
-        # Exams page
         if key in {"exams", "my exams", "assessments"}:
             if self._exams_page is None:
                 self._build_exams_page()
-
             if self._exams_page is None:
                 logger.warning("Exams page could not be built")
                 return
-
-            # Refresh each time user opens Exams, so pending requests/upcoming exams stay current.
             try:
                 self._exams_page.refresh_data()
             except Exception as exc:
                 logger.warning("Could not refresh Exams page: %s", exc)
-
             self._navigate_to(PAGE_EXAMS)
             return
 

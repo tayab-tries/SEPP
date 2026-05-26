@@ -176,8 +176,10 @@ class PendingRequestCard(QWidget):
         """Populate the row with data pushed from the page layer."""
         self._request_id = data.get("request_id", "")
         self._exam_name  = data.get("exam_name",  "Unknown Exam")
+        approved = bool(data.get("approved"))
 
         self._name_lbl.setText(self._exam_name)
         self._exam_id_lbl.setText(f"ID: {data.get('exam_id', '—')}")
         self._date_lbl.setText(data.get("request_date", "—"))
         self._apply_status_style(data.get("status", "Awaiting Approval"))
+        self._cancel_btn.setVisible(not approved)

@@ -25,7 +25,7 @@ from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from pydantic import BaseModel
 
 from server.database import get_db
@@ -100,6 +100,8 @@ def serialize_exam_access_request(req: ExamAccessRequest) -> dict:
     }
 
 def serialize_student_exam(e: Exam) -> dict:
+    question_count = len(e.questions or [])
+    is_live = e.status == ExamStatus.LIVE
     return {
         "id": e.id,
         "exam_id": e.id,
@@ -114,6 +116,8 @@ def serialize_student_exam(e: Exam) -> dict:
         "duration_minutes": e.duration_minutes,
         "start_time": e.scheduled_start.isoformat() if e.scheduled_start else None,
         "end_time": e.scheduled_end.isoformat() if e.scheduled_end else None,
+        "question_count": question_count,
+        "check_in_open": is_live and question_count > 0,
 
         "exam_type": "Proctored" if e.require_liveness_check else "Open Book",
     }
@@ -541,7 +545,7 @@ def list_student_exams(
 
 @router.get("/exams/upcoming")
 def list_upcoming_assessments(
-    limit: int = 5,
+    limit: int = 50,
     current_user: User = Depends(require_student),
     db: Session = Depends(get_db),
 ):
@@ -565,16 +569,23 @@ def list_upcoming_assessments(
     if approved_exam_ids:
         access_filters.append(Exam.id.in_(approved_exam_ids))
 
-    now = datetime.utcnow()
-
     exams = (
         db.query(Exam)
         .filter(
             or_(*access_filters),
-            Exam.scheduled_start.isnot(None),
-            Exam.scheduled_start >= now,
+            Exam.status != ExamStatus.CLOSED,
         )
-        .order_by(Exam.scheduled_start.asc())
+        .order_by(
+            case(
+                (Exam.status == ExamStatus.LIVE, 0),
+                (Exam.status == ExamStatus.SCHEDULED, 1),
+                (Exam.status == ExamStatus.DRAFT, 2),
+                else_=3,
+            ),
+            Exam.scheduled_start.is_(None),
+            Exam.scheduled_start.asc(),
+            Exam.created_at.desc(),
+        )
         .limit(limit)
         .all()
     )
@@ -606,23 +617,53 @@ def get_next_exam(
     if approved_exam_ids:
         access_filters.append(Exam.id.in_(approved_exam_ids))
 
-    now = datetime.utcnow()
-
-    exam = (
+    live_exam = (
         db.query(Exam)
         .filter(
             or_(*access_filters),
-            Exam.scheduled_start.isnot(None),
-            Exam.scheduled_start >= now,
+            Exam.status == ExamStatus.LIVE,
         )
         .order_by(Exam.scheduled_start.asc())
         .first()
     )
 
-    if not exam:
+    if live_exam:
+        return serialize_student_exam(live_exam)
+
+    scheduled_exam = (
+        db.query(Exam)
+        .filter(
+            or_(*access_filters),
+            Exam.status == ExamStatus.SCHEDULED,
+            Exam.scheduled_start.isnot(None),
+        )
+        .order_by(Exam.scheduled_start.asc())
+        .first()
+    )
+
+    if scheduled_exam:
+        return serialize_student_exam(scheduled_exam)
+
+    draft_or_other_exam = (
+        db.query(Exam)
+        .filter(
+            or_(*access_filters),
+            Exam.status != ExamStatus.CLOSED,
+        )
+        .order_by(
+            case(
+                (Exam.status == ExamStatus.DRAFT, 0),
+                else_=1,
+            ),
+            Exam.created_at.desc(),
+        )
+        .first()
+    )
+
+    if not draft_or_other_exam:
         return None
 
-    return serialize_student_exam(exam)
+    return serialize_student_exam(draft_or_other_exam)
 
 @router.get("/exams/examiner/owned")
 def list_examiner_exams(
@@ -648,6 +689,7 @@ def list_examiner_exams(
         rows.append(
             {
                 "exam_id": e.id,
+                "join_code": e.join_code,
                 "class_id": e.class_id,
                 "class_name": c.name if c else "Unknown class",
                 "title": e.title,
@@ -672,7 +714,10 @@ def get_my_exam_access_requests(
     requests = (
         db.query(ExamAccessRequest)
         .join(Exam, Exam.id == ExamAccessRequest.exam_id)
-        .filter(ExamAccessRequest.student_id == current_user.id)
+        .filter(
+            ExamAccessRequest.student_id == current_user.id,
+            ExamAccessRequest.approved == False,
+        )
         .order_by(ExamAccessRequest.requested_at.desc())
         .all()
     )
@@ -787,11 +832,57 @@ def update_exam_status(
             detail=f"Cannot transition from {exam.status} to {req.status}",
         )
 
+    if req.status == ExamStatus.LIVE:
+        question_count = db.query(Question).filter(Question.exam_id == exam_id).count()
+        if question_count == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot move this exam live until it has at least one question.",
+            )
+
     exam.status = req.status
     db.commit()
     return {
         "exam_id": exam_id,
         "new_status": req.status.value if hasattr(req.status, "value") else str(req.status),
+    }
+
+
+@router.delete("/exams/{exam_id}")
+def delete_exam(
+    exam_id: str,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """Examiner deletes one of their draft exams."""
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+    if exam.status != ExamStatus.DRAFT:
+        raise HTTPException(status_code=400, detail="Only draft exams can be deleted")
+
+    existing_sessions = db.query(ExamSession).filter(ExamSession.exam_id == exam_id).count()
+    if existing_sessions:
+        raise HTTPException(
+            status_code=400,
+            detail="This exam already has sessions and cannot be deleted as a draft.",
+        )
+
+    db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.exam_id == exam_id
+    ).delete(synchronize_session=False)
+    db.query(Question).filter(
+        Question.exam_id == exam_id
+    ).delete(synchronize_session=False)
+    db.delete(exam)
+    db.commit()
+
+    return {
+        "message": "Draft exam deleted.",
+        "exam_id": exam_id,
     }
 
 
