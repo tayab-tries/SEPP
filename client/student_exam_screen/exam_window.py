@@ -56,6 +56,7 @@ from client.student_exam_screen import StudentExamScreenWidget, FinalizingOverla
 from client.Shared.info_dialog import InfoDialog
 from client.modules.exam_engine.ui.liveness_overlay import LivenessOverlay
 from client.modules.exam_engine.ui.lockdown_overlay import LockdownOverlay
+from client.student_exam_screen.services import StudentExamApiClient
 
 logger = logging.getLogger(__name__)
 
@@ -100,14 +101,13 @@ class _EntryVerifyWorker(QThread):
     liveness_failed   = Signal(str)
     activation_failed = Signal(str)
 
-    def __init__(self, token: str, session_id: str, session: dict, image_bytes: Optional[bytes],
-                 base_url: str, camera_index: int):
+    def __init__(self, api: StudentExamApiClient, session_id: str, session: dict, image_bytes: Optional[bytes],
+                 camera_index: int):
         super().__init__()
-        self._token        = token
+        self._api = api
         self._session_id   = session_id
         self._session      = dict(session)
         self._image_bytes  = image_bytes
-        self._base_url     = base_url
         self._camera_index = camera_index
 
     def run(self):
@@ -130,21 +130,12 @@ class _EntryVerifyWorker(QThread):
 
         # Step 1 — server-side face match
         try:
-            resp = requests.post(
-                f"{self._base_url}/auth/verify-face",
-                headers={"Authorization": f"Bearer {self._token}"},
-                files={"image": ("entry_verify.jpg", image_bytes, "image/jpeg")},
-                timeout=12,
-            )
-        except requests.RequestException as exc:
+            body = self._api.verify_face(image_bytes)
+        except Exception as exc:
             logger.exception("Entry face verification request failed")
             self.liveness_failed.emit(f"Face verification network error: {exc}")
             return
 
-        if resp.status_code != 200:
-            self.liveness_failed.emit(f"Face verification failed: {resp.text[:300]}")
-            return
-        body = resp.json() or {}
         if not body.get("verified"):
             self.liveness_failed.emit(
                 "Face verification failed: identity did not match enrolled profile."
@@ -152,25 +143,10 @@ class _EntryVerifyWorker(QThread):
             return
 
         # Step 2 — activate session (skip if already active/locked)
-        status = str(self._session.get("status") or "").lower()
-        if status in {"active", "locked"}:
-            self.verified.emit()
-            return
-
         try:
-            resp = requests.post(
-                f"{self._base_url}/sessions/{self._session_id}/activate",
-                headers={"Authorization": f"Bearer {self._token}"},
-                timeout=10,
-            )
-        except requests.RequestException:
-            self.activation_failed.emit("Network error while activating the exam session.")
-            return
-
-        if resp.status_code != 200:
-            self.activation_failed.emit(
-                f"Could not activate the exam session: {resp.text[:300]}"
-            )
+            self._api.activate_session(self._session_id)
+        except Exception as exc:
+            self.activation_failed.emit(f"Could not activate the exam session: {exc}")
             return
 
         self.verified.emit()
@@ -212,6 +188,7 @@ class ExamWindow(QMainWindow):
         questions: list,
         token:     str,
         embedded:  bool = False,
+        api: StudentExamApiClient | None = None,
     ):
         super().__init__()
         self.embedded = embedded
@@ -221,6 +198,10 @@ class ExamWindow(QMainWindow):
         self.exam          = exam
         self.questions     = [normalize_question_payload(q) for q in questions]
         self.token         = token
+        self.api = api or StudentExamApiClient(
+            base_url=BASE_URL,
+            access_token=token,
+        )
         self.current_index = 0
 
         self.session_id = resolve_id(session, "session_id")
@@ -518,7 +499,8 @@ class ExamWindow(QMainWindow):
 
         from client.core.api_worker import ApiWorker
         self._skip_activate_worker = ApiWorker(
-            _http_activate_session, self.token, BASE_URL, self.session_id
+            self.api.activate_session,
+            self.session_id,
         )
         self._skip_activate_worker.finished.connect(self._on_skip_activate_result)
         self._skip_activate_worker.errored.connect(
@@ -528,12 +510,7 @@ class ExamWindow(QMainWindow):
 
     @Slot(object)
     def _on_skip_activate_result(self, result: dict):
-        if result["status"] != 200:
-            self._on_activation_failed(
-                f"Could not activate the exam session: {result['text'][:300]}"
-            )
-            return
-        self.session["status"] = SessionStatus.ACTIVE.value
+        self.session["status"] = result.get("status", SessionStatus.ACTIVE.value)
         self._on_skip_activated()
 
     def _on_skip_activated(self):
@@ -564,11 +541,10 @@ class ExamWindow(QMainWindow):
             return
 
         self._entry_verify_worker = _EntryVerifyWorker(
-            token=self.token,
+            api=self.api,
             session_id=self.session_id,
             session=self.session,
             image_bytes=self._entry_verify_image,
-            base_url=BASE_URL,
             camera_index=CAMERA_INDEX,
         )
         self._entry_verify_worker.verified.connect(self._on_entry_verified)
@@ -773,9 +749,7 @@ class ExamWindow(QMainWindow):
         from client.core.api_worker import ApiWorker
 
         self._finalize_worker = ApiWorker(
-            _http_finalize_session,
-            self.token,
-            BASE_URL,
+            self.api.finalize_session,
             self.session_id,
             payload,
         )

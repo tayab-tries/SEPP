@@ -170,7 +170,12 @@ async def student_websocket(
         await websocket.close(code=4005, reason="Session is not active")
         return
 
-    authenticated = await manager.connect_student(websocket, session_id, exam_id)
+    authenticated = await manager.connect_student(
+        websocket,
+        session_id,
+        exam_id,
+        db_session.student_id,
+    )
     if not authenticated:
         return  # connect_student already closed the connection
 
@@ -202,14 +207,18 @@ async def examiner_websocket(
         await websocket.close(code=4004, reason="Exam not found")
         return
 
-    authenticated = await manager.connect_examiner(websocket, exam_id)
+    authenticated = await manager.connect_examiner(
+        websocket,
+        exam_id,
+        exam.creator_id,
+    )
     if not authenticated:
         return
 
     try:
         while True:
             data = await websocket.receive_json()
-            await manager.handle_examiner_message(websocket, exam_id, data)
+            await manager.handle_examiner_message(websocket, exam_id, data, db)
     except WebSocketDisconnect:
         manager.disconnect_examiner(websocket, exam_id)
 

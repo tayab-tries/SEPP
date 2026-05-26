@@ -467,7 +467,7 @@ class MainWindow(QMainWindow):
             )
             return
 
-        from client.modules.exam_engine.exam_window import ExamWindow
+        from client.student_exam_screen.exam_window import ExamWindow
 
         try:
             self._active_exam_window = ExamWindow(
