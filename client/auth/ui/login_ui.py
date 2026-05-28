@@ -769,6 +769,12 @@ class LoginUI(QWidget):
         if self._spinner is not None:
             self._spinner.setGeometry(self.rect())
 
+    def reset(self):
+        self.username.clear()
+        self.pw_field.clear()
+        self.policy_checkbox.setChecked(False)
+        self.set_status("", "")
+
     # ─────────────────────────────────────────────────────────────────────
     #  Thread management
     # ─────────────────────────────────────────────────────────────────────

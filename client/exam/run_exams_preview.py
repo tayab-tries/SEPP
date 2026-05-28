@@ -222,9 +222,9 @@ for mod_name, rel_path in [
      "exam/views/pending_requests_panel.py"),
     ("client.exam.views.join_exam_widget",
      "exam/views/join_exam_widget.py"),
-    ("client.exam.views.security_checklist_widget",
-     "exam/views/security_checklist_widget.py"),
-        ("client.exam.views.exams_page",
+    ("client.dashboard.views.recent_results",
+     "dashboard/views/recent_results.py"),
+    ("client.exam.views.exams_page",
      "exam/views/exams_page.py"),
 ]:
     _load_from_path(mod_name, str(_root / rel_path))

@@ -10,7 +10,7 @@ from typing import Optional
 
 import requests
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, QSettings
 from PySide6.QtGui import QKeyEvent, QCloseEvent
 
 from client.modules.common.loading_spinner import SpinnerOverlay
@@ -132,8 +132,15 @@ class MainWindow(QMainWindow):
         # Single overlay instance — reused for every page switch
         self._nav_spinner = SpinnerOverlay(parent=self._stack)
 
+        self._settings = QSettings("SEPP", "ExamApp")
+
         self._load_pages()
-        self._stack.setCurrentIndex(PAGE_STARTUP)
+        
+        saved_token = self._settings.value("auth_token")
+        if saved_token:
+            self._validate_saved_token(saved_token)
+        else:
+            self._stack.setCurrentIndex(PAGE_STARTUP)
         logger.info("MainWindow ready")
 
     def _load_pages(self):
@@ -180,6 +187,8 @@ class MainWindow(QMainWindow):
 
         self._student_dashboard = DashboardPage()
         self._student_dashboard.nav_requested.connect(self._on_dashboard_nav_requested)
+        self._student_dashboard.sign_out_requested.connect(self._on_sign_out_requested)
+        self._student_dashboard.review_requested.connect(self._on_review_requested)
 
         # Replace the placeholder at index 3 without disturbing other indices.
         self._stack.insertWidget(PAGE_STUDENT_DASHBOARD, self._student_dashboard)
@@ -194,6 +203,7 @@ class MainWindow(QMainWindow):
     def _build_examiner_dashboard(self):
         from client.modules.dashboard.examiner_dashboard import ExaminerDashboard
         self._examiner_dashboard = ExaminerDashboard()
+        self._examiner_dashboard.sign_out_requested.connect(self._on_sign_out_requested)
         self._stack.insertWidget(PAGE_EXAMINER_DASHBOARD, self._examiner_dashboard)
         ph = self._examiner_placeholder
         if ph is not None:
@@ -213,47 +223,89 @@ class MainWindow(QMainWindow):
             base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
             access_token=self._auth_token,
         )
-
         self._exams_page = ExamsPage(api=api)
-
-        # Sidebar navigation from ExamsPage should come back to MainWindow.
         self._exams_page.nav_requested.connect(self._on_dashboard_nav_requested)
-
-        # Check-in navigation is not fully wired yet, but connect it so clicks are not lost.
         self._exams_page.check_in_navigated.connect(self._on_exam_check_in_requested)
-
-        # Replace placeholder at index 5 without disturbing other indices.
+        self._exams_page.review_requested.connect(self._on_review_requested)
+        self._exams_page.sign_out_requested.connect(self._on_sign_out_requested)
         self._stack.insertWidget(PAGE_EXAMS, self._exams_page)
 
         ph = self._exams_placeholder
         if ph is not None:
             self._stack.removeWidget(ph)
             ph.deleteLater()
-
         self._exams_placeholder = None
 
-    def _build_exams_page(self):
-        from client.exam.views.exams_page import ExamsPage
-        from client.exam.services.api_client import ApiClient
+    # ── Authentication / Auto-Login ────────────────────────────────────────
 
-        if not self._auth_token:
-            logger.warning("Cannot build ExamsPage without auth token")
-            return
+    def _validate_saved_token(self, token: str):
+        from client.core.api_worker import ApiWorker
+        self._nav_spinner.show()
+        base_url = os.getenv("API_BASE_URL", "http://127.0.0.1:8000")
+        
+        def _http_val(t, b):
+            try:
+                r = requests.get(f"{b.rstrip('/')}/auth/me", headers={"Authorization": f"Bearer {t}"}, timeout=10)
+                if r.status_code == 200:
+                    return r.json()
+                raise RuntimeError("Invalid token")
+            except Exception as e:
+                raise RuntimeError(str(e))
 
-        api = ApiClient(
-            base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
-            access_token=self._auth_token,
+        self._val_worker = ApiWorker(_http_val, token, base_url)
+        self._val_worker.finished.connect(lambda user: self._on_token_validated(token, user))
+        self._val_worker.errored.connect(self._on_token_invalid)
+        self._val_worker.start()
+
+    def _on_token_validated(self, token: str, user: dict):
+        self._nav_spinner.hide()
+        # Some endpoints return "role", others return "account_type".
+        role = user.get("role", user.get("account_type", "student"))
+        self._on_login_success(
+            token=token,
+            role=role,
+            user_id=user.get("user_id", user.get("id", "")),
+            full_name=user.get("full_name", user.get("name", "User")),
+            face_enrolled=user.get("face_enrolled", False)
         )
-        self._exams_page = ExamsPage(api=api)
-        self._exams_page.nav_requested.connect(self._on_dashboard_nav_requested)
-        self._exams_page.check_in_navigated.connect(self._on_exam_check_in_requested)
-        self._stack.insertWidget(PAGE_EXAMS, self._exams_page)
 
-        ph = self._exams_placeholder
-        if ph is not None:
-            self._stack.removeWidget(ph)
-            ph.deleteLater()
-        self._exams_placeholder = None
+    def _on_token_invalid(self, msg: str):
+        self._nav_spinner.hide()
+        logger.warning(f"Auto-login failed: {msg}")
+        self._settings.clear()
+        self._navigate_to(PAGE_STARTUP)
+
+    def _on_sign_out_requested(self):
+        self._settings.clear()
+        self._auth_token = None
+        self._active_user_id = None
+        self._active_role = None
+
+        if hasattr(self, "_login_ui"):
+            self._login_ui.reset()
+        
+        if self._student_dashboard is not None:
+            self._stack.removeWidget(self._student_dashboard)
+            self._student_dashboard.deleteLater()
+            self._student_dashboard = None
+            self._student_placeholder = QWidget()
+            self._stack.insertWidget(PAGE_STUDENT_DASHBOARD, self._student_placeholder)
+
+        if self._examiner_dashboard is not None:
+            self._stack.removeWidget(self._examiner_dashboard)
+            self._examiner_dashboard.deleteLater()
+            self._examiner_dashboard = None
+            self._examiner_placeholder = QWidget()
+            self._stack.insertWidget(PAGE_EXAMINER_DASHBOARD, self._examiner_placeholder)
+
+        if self._exams_page is not None:
+            self._stack.removeWidget(self._exams_page)
+            self._exams_page.deleteLater()
+            self._exams_page = None
+            self._exams_placeholder = QWidget()
+            self._stack.insertWidget(PAGE_EXAMS, self._exams_placeholder)
+
+        self._navigate_to(PAGE_STARTUP)
 
     # ── Navigation ─────────────────────────────────────────────────────────
 
@@ -329,6 +381,8 @@ class MainWindow(QMainWindow):
         self._active_user_id = user_id
         self._active_full_name = full_name
         self._student_face_enrolled = bool(face_enrolled)
+
+        self._settings.setValue("auth_token", token)
 
         role_key = str(role).strip().lower()
         self._active_role = role_key
@@ -520,6 +574,52 @@ class MainWindow(QMainWindow):
         ))
         QTimer.singleShot(80, self._nav_spinner.hide)
 
+    def _on_review_requested(self, session_id: str) -> None:
+        self._nav_spinner.show()
+        
+        from client.review.services.api_client import ReviewApiClient
+        from client.review.services.api_worker import ApiWorker
+        
+        self._review_api = ReviewApiClient()
+        self._review_api.set_token(self._auth_token)
+        self._review_worker = ApiWorker(self._review_api.fetch_review_data, session_id)
+        
+        def on_success(data):
+            self._nav_spinner.hide()
+            from client.review.views.review_screen_widget import ReviewScreenWidget
+            review_page = ReviewScreenWidget(
+                questions=data.get("questions", []),
+                answers=data.get("answers", []),
+                exam=data.get("exam", {}),
+                session=data.get("session", {}),
+            )
+            
+            def _close_review():
+                self._stack.setCurrentIndex(PAGE_EXAMS if self._exams_page is not None else PAGE_STUDENT_DASHBOARD)
+                self._stack.removeWidget(review_page)
+                review_page.deleteLater()
+                self.showFullScreen()
+                self.raise_()
+                self.activateWindow()
+
+            review_page.close_requested.connect(_close_review)
+            
+            self._stack.addWidget(review_page)
+            QTimer.singleShot(0, lambda: (
+                self._stack.setCurrentWidget(review_page),
+                self.showFullScreen(),
+                self.raise_(),
+                self.activateWindow(),
+            ))
+
+        def on_error(msg):
+            self._nav_spinner.hide()
+            self._show_info_dialog("Review Error", f"Could not load review data:\n{msg}")
+
+        self._review_worker.finished.connect(on_success)
+        self._review_worker.errored.connect(on_error)
+        self._review_worker.start()
+
     def closeEvent(self, event: QCloseEvent):
         # Ensure signup camera/background workers are stopped before teardown.
         try:
@@ -534,6 +634,16 @@ class MainWindow(QMainWindow):
         try:
             if self._exam_launch_worker is not None and self._exam_launch_worker.isRunning():
                 self._exam_launch_worker.wait(2000)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_val_worker') and self._val_worker is not None and self._val_worker.isRunning():
+                self._val_worker.wait(2000)
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_review_worker') and self._review_worker is not None and self._review_worker.isRunning():
+                self._review_worker.wait(2000)
         except Exception:
             pass
         super().closeEvent(event)

@@ -16,7 +16,7 @@ from client.exam.views.sidebar import SidebarWidget
 from client.exam.views.upcoming_exams_panel    import UpcomingExamsPanel
 from client.exam.views.pending_requests_panel  import PendingRequestsPanel
 from client.exam.views.join_exam_widget        import JoinExamWidget
-from client.exam.views.security_checklist_widget import SecurityChecklistWidget
+from client.dashboard.views.recent_results     import RecentResults
 from client.Shared.view_details_dialog     import ViewDetailsDialog
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -107,6 +107,8 @@ class ExamsPage(QWidget):
 
     nav_requested      = Signal(str)   # label  → MainWindow
     check_in_navigated = Signal(str)   # exam_id → MainWindow
+    review_requested   = Signal(str)   # session_id → MainWindow
+    sign_out_requested = Signal()      # → MainWindow
 
     AUTO_REFRESH_MS = 10_000
 
@@ -157,6 +159,7 @@ class ExamsPage(QWidget):
         # Sidebar
         self._sidebar = SidebarWidget()
         self._sidebar.nav_clicked.connect(self._on_nav)
+        self._sidebar.sign_out_requested.connect(self.sign_out_requested.emit)
         # Mark "Exams" as the active nav item for this page
         self._sidebar._on_item_clicked("Exams")
         body_lay.addWidget(self._sidebar)
@@ -191,10 +194,11 @@ class ExamsPage(QWidget):
         right_col.setSpacing(16)
 
         self._join_widget      = JoinExamWidget()
-        self._checklist_widget = SecurityChecklistWidget()
+        self._recent_results   = RecentResults(api=self._api)
+        self._recent_results.result_clicked.connect(self.review_requested.emit)
 
         right_col.addWidget(self._join_widget)
-        right_col.addWidget(self._checklist_widget)
+        right_col.addWidget(self._recent_results)
         right_col.addStretch()
 
         panels.addLayout(left_col, stretch=60)
@@ -303,11 +307,12 @@ class ExamsPage(QWidget):
             return
 
         self._load_refresh_pending = False
-        self._load_jobs_remaining = 2
+        self._load_jobs_remaining = 3
 
         if show_loading:
             self._upcoming_panel.set_loading()
             self._pending_panel.set_loading()
+            self._recent_results.set_loading()
 
         self._run_api_job(
             self._api.get_upcoming_exams,
@@ -329,6 +334,18 @@ class ExamsPage(QWidget):
             ),
             lambda msg, replace_view=show_loading: (
                 self._pending_panel.set_error(msg) if replace_view else None,
+                self._finish_load_job(),
+            ),
+        )
+
+        self._run_api_job(
+            self._api.get_recent_results,
+            lambda results: (
+                self._recent_results.set_results(results),
+                self._finish_load_job(),
+            ),
+            lambda msg, replace_view=show_loading: (
+                self._recent_results.set_error(msg) if replace_view else None,
                 self._finish_load_job(),
             ),
         )

@@ -460,6 +460,13 @@ def get_my_history(
         mcq_score = float(session.mcq_score) if session.mcq_score is not None else 0.0
         essay_score = float(session.essay_score) if session.essay_score is not None else 0.0
         total_score = round(mcq_score + essay_score, 2)
+        has_essays = db.query(Question).filter(
+            Question.exam_id == session.exam_id,
+            Question.question_type == QuestionType.ESSAY
+        ).count() > 0
+
+        is_graded = session.essay_score is not None if has_essays else True
+
         history.append(
             {
                 "session_id": session.id,
@@ -478,6 +485,7 @@ def get_my_history(
                 "total_score": total_score,
                 "integrity_score": session.integrity_score,
                 "integrity_recommendation": integrity_recommendation(session.integrity_score),
+                "is_graded": is_graded,
             }
         )
 

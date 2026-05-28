@@ -322,9 +322,10 @@ class ExamWindow(QMainWindow):
         # Controller → LivenessOverlay
         self._sig_liveness_status.connect(self.liveness_overlay.set_status)
         self._sig_liveness_state.connect(self.liveness_overlay.set_state)
-        # Preview bytes are produced on CameraMonitor's reader thread — force queued
-        # delivery so QLabel pixmap updates always run on the GUI thread (avoids
-        # QPainter warnings and stuck / corrupted preview).
+        # Preview bytes: Phase 1 → liveness overlay (disconnected after liveness passes).
+        # Phase 2 → sidebar (reconnected by _rewire_liveness_preview_signal).
+        # Initial connection is to liveness_overlay for proctored exams.
+        # For open-book exams _rewire_liveness_preview_signal is called immediately in _on_skip_activated.
         self._sig_liveness_preview.connect(
             self.liveness_overlay.set_preview_frame,
             Qt.ConnectionType.QueuedConnection,
@@ -353,13 +354,22 @@ class ExamWindow(QMainWindow):
         self.heartbeat.examiner_command.connect(self._handle_examiner_command)
 
     def _rewire_liveness_preview_signal(self) -> None:
-        """Reconnect preview signal so queued pixmap deliveries do not starve the GUI."""
+        """
+        Called once after liveness passes (or immediately for open-book exams).
+        Disconnects preview signal from the liveness overlay and reconnects it to
+        the sidebar live-feed slot, keeping delivery QueuedConnection so pixmap
+        updates always land on the GUI thread.
+        """
         try:
             self._sig_liveness_preview.disconnect(self.liveness_overlay.set_preview_frame)
         except (RuntimeError, TypeError):
             pass
+        try:
+            self._sig_liveness_preview.disconnect(self.exam_ui.set_preview_frame)
+        except (RuntimeError, TypeError):
+            pass
         self._sig_liveness_preview.connect(
-            self.liveness_overlay.set_preview_frame,
+            self.exam_ui.set_preview_frame,
             Qt.ConnectionType.QueuedConnection,
         )
 
@@ -517,16 +527,15 @@ class ExamWindow(QMainWindow):
         self._liveness_passed = True
         self._start_exam_timer_after_activation()
         self.liveness_overlay.hide()
-        try:
-            self.camera_monitor.start_monitoring()
-        except Exception:
-            logger.exception("Camera monitoring failed to start (non-fatal when liveness disabled)")
+        # Camera monitoring is NOT started for open-book exams (require_liveness_check=False).
+        # The same flag that disables liveness also disables continuous monitoring.
+        self.exam_ui.set_camera_status("Camera monitoring disabled for this exam.")
         self._sig_nav_enabled.emit(False, len(self.questions) > 1, True)
         self.event_logger.log(ProctoringEvent(
             event_type=EventType.EXAM_STARTED,
             severity=EventSeverity.INFO,
             timestamp=datetime.utcnow(),
-            metadata={"session_id": self.session_id, "liveness_gate": "skipped"},
+            metadata={"session_id": self.session_id, "liveness_gate": "skipped", "monitoring": "disabled"},
         ))
 
     @Slot()
@@ -571,7 +580,8 @@ class ExamWindow(QMainWindow):
 
     @Slot(str)
     def _on_activation_failed(self, reason: str):
-        QMessageBox.critical(self, "Activation Failed", reason)
+        dlg = InfoDialog(title="Activation Failed", body=reason, parent=self)
+        dlg.exec_()
         self._finish_exam()
 
     @Slot(str)
@@ -586,7 +596,8 @@ class ExamWindow(QMainWindow):
             timestamp=datetime.utcnow(),
             metadata={"reason": reason},
         ))
-        QMessageBox.critical(self, "Verification Failed", reason)
+        dlg = InfoDialog(title="Verification Failed", body=reason, parent=self)
+        dlg.exec_()
         self._finish_exam()
 
     # ── Navigation ─────────────────────────────────────────────────────────
@@ -802,11 +813,12 @@ class ExamWindow(QMainWindow):
             QTimer.singleShot(5000, lambda: self._finalize_exam(reason, title, message))
             return
 
-        QMessageBox.warning(
-            self,
-            "Submission Warning",
-            f"Answers are saved locally, but server finalization failed.\n\n{error}",
-        )        
+        dlg = InfoDialog(
+            title="Submission Warning",
+            body=f"Answers are saved locally, but server finalization failed.\n\n{error}",
+            parent=self,
+        )
+        dlg.exec_()
     # ── Countdown ──────────────────────────────────────────────────────────
 
     def _update_countdown(self):
@@ -884,13 +896,11 @@ class ExamWindow(QMainWindow):
             except (RuntimeError, TypeError):
                 pass
             if th.isRunning():
-                if not th.wait(60_000):
-                    logger.warning(
-                        "%s did not finish within 60s — forcing terminate",
-                        attr,
-                    )
+                if not th.wait(2000):
+                    logger.warning("%s did not finish within 2s — forcing terminate", attr)
                     th.terminate()
-                    th.wait(3_000)
+                    th.wait(1000)
+            th.deleteLater()
             setattr(self, attr, None)
 
     def _cleanup(self):

@@ -109,3 +109,13 @@ class StudentExamScreenWidget(QWidget):
     def set_exam_enabled(self, enabled: bool) -> None:
         self.main_screen.set_questions_enabled(enabled)
         self.set_navigation_enabled(False, False, enabled)
+
+    # ── Camera feed passthroughs ───────────────────────────────────────────
+
+    def set_preview_frame(self, image_bytes: bytes) -> None:
+        """Forward a JPEG camera frame to the sidebar live feed."""
+        self.sidebar.set_preview_frame(image_bytes)
+
+    def set_camera_status(self, text: str) -> None:
+        """Show a status label in the sidebar camera box (no live feed)."""
+        self.sidebar.set_camera_status(text)

@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
     QProgressBar, QFrame, QSizePolicy, QScrollArea
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QCursor
 
 from client.dashboard.services.api_client import ApiClient
@@ -57,9 +57,14 @@ CARD_RADIUS      = 10
 # ──────────────────────────────────────────────────────────────────────────────
 class _ResultItem(QWidget):
     """Single result entry: date, title, score, progress bar, divider."""
+    
+    clicked = Signal(dict)
 
     def __init__(self, data: dict) -> None:
         super().__init__()
+        self.data = data
+        self.session_id = data.get("session_id")
+        self.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
         self.setMinimumHeight(72)
         self.setMaximumHeight(72)
         self.setStyleSheet("background: transparent;")
@@ -142,9 +147,15 @@ class _ResultItem(QWidget):
         root.addWidget(bar)
         root.addWidget(div)
 
+    def mousePressEvent(self, event):
+        if self.session_id:
+            self.clicked.emit(self.data)
+        super().mousePressEvent(event)
 
 # ──────────────────────────────────────────────────────────────────────────────
 class RecentResults(QWidget):
+
+    result_clicked = Signal(dict)
 
     def __init__(self, api: ApiClient) -> None:
         super().__init__()
@@ -162,7 +173,7 @@ class RecentResults(QWidget):
         root.setContentsMargins(20, 14, 20, 10)
         root.setSpacing(0)
 
-        title_lbl = QLabel("Recent Results")
+        title_lbl = QLabel("Recent Attempts")
         title_lbl.setStyleSheet(
             f"color:{TEXT_PRIMARY}; font-size:15px; font-weight:700; background:transparent;"
         )
@@ -247,7 +258,7 @@ class RecentResults(QWidget):
 
     def set_loading(self) -> None:
         self._clear()
-        lbl = QLabel("Loading recent results…")
+        lbl = QLabel("Loading recent attempts…")
         lbl.setStyleSheet(
             f"color:{TEXT_SECONDARY}; font-size:12px; background:transparent;"
         )
@@ -259,20 +270,23 @@ class RecentResults(QWidget):
         self._clear()
 
         results = results[:5]
+        rows = results[:5]
 
         if not results:
             self.set_empty()
             return
 
-        for r in results:
-            self._list_lay.addWidget(_ResultItem(r))
+        for item_data in rows:
+            item = _ResultItem(item_data)
+            item.clicked.connect(self.result_clicked.emit)
+            self._list_lay.addWidget(item)
 
         self._list_lay.addStretch()
 
 
     def set_empty(self) -> None:
         self._clear()
-        lbl = QLabel("No recent results yet.")
+        lbl = QLabel("No recent attempts yet.")
         lbl.setStyleSheet(
             f"color:{TEXT_SECONDARY}; font-size:12px; background:transparent;"
         )
@@ -280,7 +294,7 @@ class RecentResults(QWidget):
         self._list_lay.addStretch()
 
 
-    def set_error(self, message: str = "Could not load recent results.") -> None:
+    def set_error(self, message: str = "Could not load recent attempts.") -> None:
         self._clear()
         lbl = QLabel(message)
         lbl.setStyleSheet(

@@ -953,6 +953,18 @@ def get_questions(
     ).order_by(Question.order_index).all()
 
     is_examiner = (current_user.role) == Role.EXAMINER
+    show_correct = is_examiner
+
+    if not is_examiner:
+        from server.models.models import ExamSession
+        from shared.constants import SessionStatus
+        completed = db.query(ExamSession).filter(
+            ExamSession.exam_id == exam_id,
+            ExamSession.student_id == current_user.id,
+            ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED])
+        ).first()
+        if completed:
+            show_correct = True
 
     return [
         {
@@ -962,7 +974,7 @@ def get_questions(
             "text": q.text,
             "marks": q.marks,
             "options": q.options,
-            "correct_option": q.correct_option if is_examiner else None,
+            "correct_option": q.correct_option if show_correct else None,
             "max_words": q.max_words,
             "min_words": q.min_words,
         }
@@ -1028,8 +1040,18 @@ def list_recent_results(
         .all()
     )
 
-    return [
-        {
+    results = []
+    for s in sessions:
+        # Check if the exam has any essay questions
+        has_essays = db.query(Question).filter(
+            Question.exam_id == s.exam_id,
+            Question.question_type == QuestionType.ESSAY
+        ).count() > 0
+
+        # It is graded if it has no essays OR if the essay_score has been assigned (i.e. not None)
+        is_graded = s.essay_score is not None if has_essays else True
+
+        results.append({
             "session_id": s.id,
             "exam_id": s.exam_id,
 
@@ -1043,11 +1065,13 @@ def list_recent_results(
             "essay_score": s.essay_score,
             "total_score": (s.mcq_score or 0) + (s.essay_score or 0),
             "integrity_score": s.integrity_score,
+            
+            "is_graded": is_graded,
 
             "status": s.status.value if hasattr(s.status, "value") else str(s.status),
-        }
-        for s in sessions
-    ]
+        })
+
+    return results
 
 @router.delete("/exams/access-requests/{request_id}")
 def cancel_my_exam_access_request(

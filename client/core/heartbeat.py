@@ -96,8 +96,17 @@ class HeartbeatManager(QObject):
     def stop(self):
         """Signal the heartbeat loop to stop and shut down the event loop."""
         self._running = False
+        
+        async def _shutdown():
+            if self._ws:
+                await self._ws.close()
+            # Cancel all tasks
+            for task in asyncio.all_tasks(self._loop):
+                if task is not asyncio.current_task():
+                    task.cancel()
+                    
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            asyncio.run_coroutine_threadsafe(_shutdown(), self._loop)
 
     def send_event_batch(self, events: list):
         """

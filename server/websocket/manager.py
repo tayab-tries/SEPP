@@ -17,9 +17,6 @@ Architecture:
   - Students and examiners tracked separately
   - Examiner connections subscribed to a specific exam_id
 """
-
-from client.dashboard import dashboard_utils
-from client.exam.views import exam_card_widget
 import asyncio
 import hashlib
 import json

@@ -187,15 +187,7 @@ class AlertFeedCard(QFrame):
         self._alerts_layout = QVBoxLayout(content_w)
         self._alerts_layout.setContentsMargins(14, 6, 14, 14)
         self._alerts_layout.setSpacing(12)
-        self.set_alerts(
-            [
-                AlertSpec("critical", "Student 012 - Eyes off Screen", "Sustained gaze detection outside monitor area (12s).", "2 mins ago", "Intervene", "Dismiss"),
-                AlertSpec("moderate", "Student 004 - Ambient Noise", "Background conversation detected at 65dB.", "5 mins ago", "Record", "Warn"),
-                AlertSpec("moderate", "Student 241 - Multiple Faces", "Secondary face detected in background periphery.", "12 mins ago", "Live Check"),
-                AlertSpec("info", "System - Connectivity Drop", "Student 056 reconnected after 5s drop.", "15 mins ago", "Logged"),
-                AlertSpec("critical", "Student 088 - Restricted App", "Browser process detected: 'chatgpt.com'.", "18 mins ago", "Terminate"),
-            ]
-        )
+        self.set_alerts([])
         scroll.setWidget(content_w)
         outer.addWidget(scroll, 1)
 

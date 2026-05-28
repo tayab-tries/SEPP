@@ -130,6 +130,7 @@ class _NavItem(QWidget):
 # ──────────────────────────────────────────────────────────────────────────────
 class SidebarWidget(QWidget):
     nav_clicked = Signal(str)
+    sign_out_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -213,7 +214,10 @@ class SidebarWidget(QWidget):
         # ── Help / Sign Out ───────────────────────────────────────────────
         root.addWidget(self._bottom_btn("?   Help"))
         root.addSpacing(2)
-        root.addWidget(self._bottom_btn("⎋   Sign Out", red=True))
+        
+        self._sign_out_btn = self._bottom_btn("⎋   Sign Out", red=True)
+        self._sign_out_btn.clicked.connect(self.sign_out_requested.emit)
+        root.addWidget(self._sign_out_btn)
 
     # ── helpers ──────────────────────────────────────────────────────────
 

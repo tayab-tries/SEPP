@@ -214,4 +214,25 @@ class ExamCardWidget(QWidget):
         self._checkin_btn.setVisible(check_in_open)
 
         face_id = data.get("face_id_required", False)
-        self._face_id_tag.setVisible(face_id)
+        if face_id:
+            self._face_id_tag.setText("Monitored")
+            self._face_id_tag.setStyleSheet(f"""
+                color: #1d4ed8;
+                background: #eff6ff;
+                border: 1px solid #bfdbfe;
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+                font-weight: 600;
+            """)
+        else:
+            self._face_id_tag.setText("Not Monitored")
+            self._face_id_tag.setStyleSheet(f"""
+                color: {TEXT_SECONDARY};
+                background: #f3f4f6;
+                border: 1px solid {BORDER_COLOR};
+                border-radius: 4px;
+                padding: 2px 8px;
+                font-size: 11px;
+            """)
+        self._face_id_tag.setVisible(True)
