@@ -160,8 +160,6 @@ class ExamsPage(QWidget):
         self._sidebar = SidebarWidget()
         self._sidebar.nav_clicked.connect(self._on_nav)
         self._sidebar.sign_out_requested.connect(self.sign_out_requested.emit)
-        # Mark "Exams" as the active nav item for this page
-        self._sidebar._on_item_clicked("Exams")
         body_lay.addWidget(self._sidebar)
 
         # Content area

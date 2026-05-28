@@ -29,7 +29,7 @@ from server.services.integrity import (
     refresh_essay_score,
     refresh_integrity_score,
 )
-from shared.constants import ExamStatus, SessionStatus, Role
+from shared.constants import ExamStatus, SessionStatus, Role, QuestionType
 
 router = APIRouter(tags=["sessions"])
 
@@ -460,10 +460,9 @@ def get_my_history(
         mcq_score = float(session.mcq_score) if session.mcq_score is not None else 0.0
         essay_score = float(session.essay_score) if session.essay_score is not None else 0.0
         total_score = round(mcq_score + essay_score, 2)
-        has_essays = db.query(Question).filter(
-            Question.exam_id == session.exam_id,
-            Question.question_type == QuestionType.ESSAY
-        ).count() > 0
+        questions = db.query(Question).filter(Question.exam_id == session.exam_id).all()
+        has_essays = any(q.question_type == QuestionType.ESSAY for q in questions)
+        max_marks = sum(q.marks for q in questions)
 
         is_graded = session.essay_score is not None if has_essays else True
 
@@ -483,6 +482,7 @@ def get_my_history(
                 "mcq_score": session.mcq_score,
                 "essay_score": session.essay_score,
                 "total_score": total_score,
+                "max_marks": max_marks,
                 "integrity_score": session.integrity_score,
                 "integrity_recommendation": integrity_recommendation(session.integrity_score),
                 "is_graded": is_graded,

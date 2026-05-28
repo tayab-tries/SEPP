@@ -23,6 +23,7 @@ PAGE_SIGNUP  = 2
 PAGE_STUDENT_DASHBOARD = 3
 PAGE_EXAMINER_DASHBOARD = 4
 PAGE_EXAMS = 5
+PAGE_REPORTS = 6
 
 
 def _extract_http_error(response: requests.Response) -> str:
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
         self._student_dashboard  = None
         self._examiner_dashboard = None
         self._exams_page = None
+        self._reports_page = None
 
         self._stack = QStackedWidget()
         self.setCentralWidget(self._stack)
@@ -175,9 +177,11 @@ class MainWindow(QMainWindow):
         self._student_placeholder  = QWidget()
         self._examiner_placeholder = QWidget()
         self._exams_placeholder    = QWidget()
+        self._reports_placeholder  = QWidget()
         self._stack.addWidget(self._student_placeholder)   # index 3
         self._stack.addWidget(self._examiner_placeholder)  # index 4
         self._stack.addWidget(self._exams_placeholder)     # index 5
+        self._stack.addWidget(self._reports_placeholder)   # index 6
 
     def _build_student_dashboard(self):
         from client.dashboard.views.dashboard_page import DashboardPage
@@ -235,6 +239,31 @@ class MainWindow(QMainWindow):
             self._stack.removeWidget(ph)
             ph.deleteLater()
         self._exams_placeholder = None
+
+    def _build_reports_page(self):
+        from client.reports.views.reports_page import ReportsPage
+        from client.reports.services.api_client import ReportsApiClient
+        
+        if not self._auth_token:
+            logger.warning("Cannot build ReportsPage without auth token")
+            return
+            
+        api = ReportsApiClient(
+            base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
+            access_token=self._auth_token,
+        )
+        
+        self._reports_page = ReportsPage(api=api)
+        self._reports_page.nav_requested.connect(self._on_dashboard_nav_requested)
+        self._reports_page.sign_out_requested.connect(self._on_sign_out_requested)
+        self._reports_page.review_requested.connect(self._on_review_requested)
+        self._stack.insertWidget(PAGE_REPORTS, self._reports_page)
+        
+        ph = self._reports_placeholder
+        if ph is not None:
+            self._stack.removeWidget(ph)
+            ph.deleteLater()
+        self._reports_placeholder = None
 
     # ── Authentication / Auto-Login ────────────────────────────────────────
 
@@ -675,6 +704,19 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 logger.warning("Could not refresh Exams page: %s", exc)
             self._navigate_to(PAGE_EXAMS)
+            return
+
+        if key in {"reports", "my reports"}:
+            if self._reports_page is None:
+                self._build_reports_page()
+            if self._reports_page is None:
+                logger.warning("Reports page could not be built")
+                return
+            try:
+                self._reports_page.refresh_data()
+            except Exception as exc:
+                logger.warning("Could not refresh Reports page: %s", exc)
+            self._navigate_to(PAGE_REPORTS)
             return
 
         # Page does not exist yet, so keep showing the same dashboard-style dialog.

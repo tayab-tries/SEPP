@@ -55,9 +55,7 @@ CARD_RADIUS      = 10
 _NAV_ITEMS: list[tuple[str, str]] = [
     ("⊞", "Dashboard"),
     ("☰", "Exams"),
-    ("◎", "Monitoring"),
     ("▦", "Reports"),
-    ("⚙", "Settings"),
 ]
 
 
@@ -245,6 +243,5 @@ class SidebarWidget(QWidget):
         return btn
 
     def _on_item_clicked(self, label: str) -> None:
-        for item in self._nav_items:
-            item.set_active(item._label == label)
         self.nav_clicked.emit(label)
+

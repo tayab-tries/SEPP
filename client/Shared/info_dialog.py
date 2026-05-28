@@ -110,16 +110,17 @@ class InfoDialog(QDialog):
         # ── Body ──────────────────────────────────────────────────────────────
         body_w = QWidget()
         body_w.setStyleSheet("background: transparent;")
-        body_lay = QVBoxLayout(body_w)
-        body_lay.setContentsMargins(20, 16, 20, 20)
-        body_lay.setSpacing(14)
+        self.body_lay = QVBoxLayout(body_w)
+        self.body_lay.setContentsMargins(20, 16, 20, 20)
+        self.body_lay.setSpacing(14)
 
-        body_lbl = QLabel(body)
+        if body:
+            body_lbl = QLabel(body)
         body_lbl.setWordWrap(True)
         body_lbl.setStyleSheet(
             f"color:{T_PRIMARY}; font-size:13px; background:transparent;"
         )
-        body_lay.addWidget(body_lbl)
+            self.body_lay.addWidget(body_lbl)
 
         # ── Two-button row (only when confirm_label is provided) ──────────────
         if confirm_label:
@@ -162,7 +163,7 @@ class InfoDialog(QDialog):
 
             btn_row.addWidget(keep_btn)
             btn_row.addWidget(confirm_btn)
-            body_lay.addLayout(btn_row)
+            self.body_lay.addLayout(btn_row)
 
         card_lay.addWidget(body_w)
         outer.addWidget(card)

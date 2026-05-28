@@ -31,12 +31,13 @@ from pydantic import BaseModel
 from server.database import get_db
 from server.models.models import Class, Enrollment, Exam, Question, User, ExamSession, ExamAccessRequest
 from server.dependencies import get_current_user, require_examiner, require_student
-from shared.constants import ExamStatus, QuestionType, Role
+from shared.constants import ExamStatus, QuestionType, Role, SessionStatus
 
 router = APIRouter(tags=["exams"])
 
 
 # ── Schemas ────────────────────────────────────────────────────────────────
+
 
 class ClassCreate(BaseModel):
     name: str
@@ -574,6 +575,12 @@ def list_upcoming_assessments(
         .filter(
             or_(*access_filters),
             Exam.status != ExamStatus.CLOSED,
+            ~Exam.id.in_(
+                db.query(ExamSession.exam_id).filter(
+                    ExamSession.student_id == current_user.id,
+                    ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED])
+                )
+            ),
         )
         .order_by(
             case(
@@ -622,6 +629,12 @@ def get_next_exam(
         .filter(
             or_(*access_filters),
             Exam.status == ExamStatus.LIVE,
+            ~Exam.id.in_(
+                db.query(ExamSession.exam_id).filter(
+                    ExamSession.student_id == current_user.id,
+                    ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED])
+                )
+            ),
         )
         .order_by(Exam.scheduled_start.asc())
         .first()
@@ -636,6 +649,12 @@ def get_next_exam(
             or_(*access_filters),
             Exam.status == ExamStatus.SCHEDULED,
             Exam.scheduled_start.isnot(None),
+            ~Exam.id.in_(
+                db.query(ExamSession.exam_id).filter(
+                    ExamSession.student_id == current_user.id,
+                    ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED])
+                )
+            ),
         )
         .order_by(Exam.scheduled_start.asc())
         .first()

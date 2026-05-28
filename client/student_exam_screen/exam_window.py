@@ -895,13 +895,21 @@ class ExamWindow(QMainWindow):
                 th.disconnect(self)
             except (RuntimeError, TypeError):
                 pass
+            
+            # Always call wait() to ensure the OS thread is fully reaped 
+            # even if isRunning() is False, avoiding "Destroyed while thread is still running"
             if th.isRunning():
                 if not th.wait(2000):
                     logger.warning("%s did not finish within 2s — forcing terminate", attr)
                     th.terminate()
                     th.wait(1000)
+            else:
+                th.wait()
+                
             th.deleteLater()
-            setattr(self, attr, None)
+            # DO NOT setattr(self, attr, None) here.
+            # Dropping the Python reference immediately causes Python to invoke the C++
+            # destructor synchronously BEFORE deleteLater has a chance to execute in the event loop!
 
     def _cleanup(self):
         if self._cleaned_up:

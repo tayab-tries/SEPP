@@ -128,7 +128,7 @@ class _NavItem(QWidget):
 # ──────────────────────────────────────────────────────────────────────────────
 class SidebarWidget(QWidget):
     nav_clicked = Signal(str)
-    sign_out_clicked = Signal()
+    sign_out_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -183,7 +183,7 @@ class SidebarWidget(QWidget):
         # ── Nav items ────────────────────────────────────────────────────
         self._nav_items: list[_NavItem] = []
         for icon, label in _NAV_ITEMS:
-            item = _NavItem(icon, label, active=(label == "Dashboard"))
+            item = _NavItem(icon, label, active=(label == "Reports"))
             item.clicked.connect(self._on_item_clicked)
             self._nav_items.append(item)
             root.addWidget(item)
@@ -214,7 +214,7 @@ class SidebarWidget(QWidget):
         root.addSpacing(2)
         
         self._sign_out_btn = self._bottom_btn("⎋   Sign Out", red=True)
-        self._sign_out_btn.clicked.connect(self.sign_out_clicked.emit)
+        self._sign_out_btn.clicked.connect(self.sign_out_requested.emit)
         root.addWidget(self._sign_out_btn)
 
     # ── helpers ──────────────────────────────────────────────────────────
@@ -244,8 +244,4 @@ class SidebarWidget(QWidget):
 
     def _on_item_clicked(self, label: str) -> None:
         self.nav_clicked.emit(label)
-
-    def set_active_label(self, label: str) -> None:
-        for item in self._nav_items:
-            item.set_active(item._label == label)
 
