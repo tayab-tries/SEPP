@@ -268,6 +268,9 @@ class InfoDialog(QDialog):
 # ──────────────────────────────────────────────────────────────────────────────
 class DashboardPage(QWidget):
     nav_requested = Signal(str)
+    review_requested = Signal(str)
+    sign_out_requested = Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self._api = ApiClient()
@@ -303,6 +306,7 @@ class DashboardPage(QWidget):
 
         sidebar = SidebarWidget()
         sidebar.nav_clicked.connect(self._on_nav)
+        sidebar.sign_out_clicked.connect(self.sign_out_requested.emit)
         body_lay.addWidget(sidebar)
 
         # ── Content area ─────────────────────────────────────────────────
@@ -366,6 +370,7 @@ class DashboardPage(QWidget):
         self._quick_actions.action_triggered.connect(self._on_action)
 
         self._results = RecentResults(self._api)
+        self._results.result_clicked.connect(self._on_recent_result_clicked)
 
         right_col.addWidget(self._quick_actions)
         right_col.addWidget(self._results, stretch=1)
@@ -386,6 +391,30 @@ class DashboardPage(QWidget):
 
     def _on_nav(self, label: str) -> None:
         self.nav_requested.emit(label)
+
+    def _on_recent_result_clicked(self, data: dict) -> None:
+        session_id = data.get("session_id")
+        if not session_id:
+            return
+            
+        title = data.get("title", "Exam Attempt")
+        raw = data.get("raw", {})
+        
+        # Read the backend is_graded flag (defaults to True if somehow missing)
+        is_graded = data.get("is_graded", True)
+        
+        from client.Shared.attempt_review_dialog import AttemptReviewDialog
+        dialog = AttemptReviewDialog(title, is_graded, self)
+        
+        def on_review():
+            self.review_requested.emit(session_id)
+            
+        def on_report():
+            self._dialog("Check Report", "The detailed report feature will be implemented soon.")
+            
+        dialog.review_requested.connect(on_review)
+        dialog.report_requested.connect(on_report)
+        dialog.exec()
         
     def show_nav_dialog(self, label: str) -> None:
         self._dialog(

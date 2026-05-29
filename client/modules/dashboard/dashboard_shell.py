@@ -61,6 +61,7 @@ class DashboardNavSpec:
 
 class DashboardSidebar(QWidget):
     nav_selected = Signal(str)
+    sign_out_requested = Signal()
 
     def __init__(
         self,
@@ -79,6 +80,7 @@ class DashboardSidebar(QWidget):
 
         self._sidebar = SidebarWidget()
         self._sidebar.nav_clicked.connect(self._on_nav_clicked)
+        self._sidebar.sign_out_clicked.connect(self.sign_out_requested.emit)
         root.addWidget(self._sidebar)
 
     def set_active(self, key: str) -> None:

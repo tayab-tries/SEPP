@@ -35,9 +35,9 @@ class ExaminerOverviewPage(QWidget):
         left_layout.setSpacing(18)
 
         metrics = [
-            MetricSpec("blue", "+12% vs last hr", False, "1,248", "Total Active Students", "👥"),
-            MetricSpec("red", "Live Alerts", True, "14", "Flagged Sessions", "⚑"),
-            MetricSpec("amber", "Active Now", False, "32", "Proctors Online", "🛡"),
+            MetricSpec("blue", "Loading...", False, "-", "Total Active Students", "👥"),
+            MetricSpec("red", "Loading...", False, "-", "Flagged Sessions", "⚑"),
+            MetricSpec("amber", "Loading...", False, "-", "Proctors Online", "🛡"),
         ]
         self._metrics_section = ExaminerMetricsSection(metrics)
         left_layout.addWidget(self._metrics_section)

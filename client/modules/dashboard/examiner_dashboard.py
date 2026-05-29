@@ -6,7 +6,7 @@ import requests
 from datetime import datetime
 from typing import Optional
 
-from PySide6.QtCore import Qt, Slot, QTimer
+from PySide6.QtCore import Qt, Slot, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QWidget,
@@ -297,6 +297,7 @@ class ExaminerDashboard(QWidget):
     NAV_MONITORING = "monitoring"
     NAV_REPORTS = "reports"
     NAV_SETTINGS = "settings"
+    sign_out_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -326,6 +327,7 @@ class ExaminerDashboard(QWidget):
         self._my_exams_refresh_pending = False
         self._access_requests_refresh_pending = False
         self._access_requests_pending_exam_id = ""
+        self._is_deleted = False
 
         self._classes = QListWidget()
         self._my_exams = QListWidget()
@@ -401,6 +403,10 @@ class ExaminerDashboard(QWidget):
                     worker.wait(2000)
             except Exception:
                 pass
+
+    def deleteLater(self):
+        self._is_deleted = True
+        super().deleteLater()
 
     def _worker_is_running(self, attr_name: str) -> bool:
         worker = getattr(self, attr_name, None)
@@ -531,6 +537,7 @@ class ExaminerDashboard(QWidget):
 
     def _wire(self):
         self._sidebar.nav_selected.connect(self._on_nav_selected)
+        self._sidebar.sign_out_requested.connect(self.sign_out_requested.emit)
         self._classes.itemDoubleClicked.connect(self._open_class)
         self._sessions.itemDoubleClicked.connect(self._show_session_details)
         self._class_page.back_requested.connect(self._go_home)
@@ -600,6 +607,9 @@ class ExaminerDashboard(QWidget):
 
     @Slot(object)
     def _apply_overview_data(self, result: dict):
+        if self._is_deleted:
+            return
+
         classes_result = result.get("classes", {})
         exams_result = result.get("exams", {})
         if classes_result.get("status") == 200:

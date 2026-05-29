@@ -17,7 +17,6 @@ Architecture:
   - Students and examiners tracked separately
   - Examiner connections subscribed to a specific exam_id
 """
-
 import asyncio
 import hashlib
 import json
@@ -119,7 +118,7 @@ class ConnectionManager:
         payload = await self.authenticate(websocket)
         if payload is None:
             return False
-
+        
         if expected_student_id is not None and payload.get("sub") != expected_student_id:
             await websocket.close(code=4003, reason="Session ownership mismatch")
             return False
@@ -280,6 +279,7 @@ class ConnectionManager:
 
             if session and session.started_at:
                 exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
+
                 if exam and exam.duration_minutes:
                     from datetime import timedelta
 
@@ -321,6 +321,10 @@ class ConnectionManager:
         msg_type = data.get("type")
 
         if msg_type == WSMessageType.EXAMINER_TERMINATE:
+            from server.models.models import ExamSession
+            from server.services.integrity import refresh_integrity_score
+            from shared.constants import SessionStatus
+
             target_session: str | None = data.get("session_id")
             reason: str = data.get("reason", "Examiner terminated session")
 
@@ -356,7 +360,7 @@ class ConnectionManager:
 
             await self.send_to_student(target_session, {
                 "type": WSMessageType.EXAMINER_TERMINATE,
-                "reason": reason,
+                "reason": reason,   
             })
 
         elif msg_type == WSMessageType.EXAM_PAUSE:
@@ -368,7 +372,6 @@ class ConnectionManager:
             await self.broadcast_to_exam_students(exam_id, {
                 "type": WSMessageType.EXAM_END,
             })
-
     # ── Event ingestion ────────────────────────────────────────────────────
 
     async def _ingest_events(
@@ -443,13 +446,16 @@ class ConnectionManager:
         """
         Upsert student answers from local cache to the server.
 
-        Only accepts answers for questions that belong to this session's exam.
+        Security:
+        - Only accepts answers for questions that belong to this session's exam.
+        - Ignores malformed or foreign question IDs.
         """
         from server.models.models import Answer, ExamSession, Question
 
         session = db.query(ExamSession).filter(
             ExamSession.id == session_id,
         ).first()
+
         if not session:
             return
 
@@ -464,6 +470,7 @@ class ConnectionManager:
 
         for ans_data in answers:
             question_id = ans_data.get("question_id")
+
             if not question_id or question_id not in valid_question_ids:
                 continue
 

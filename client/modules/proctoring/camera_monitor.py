@@ -524,10 +524,11 @@ def _entry_process_target(
 
 
 def _monitoring_process_target(
-    event_queue:  multiprocessing.Queue,
-    stop_event:   multiprocessing.synchronize.Event,
-    pause_event:  multiprocessing.synchronize.Event,
-    config:       dict,
+    event_queue:   multiprocessing.Queue,
+    preview_queue: multiprocessing.Queue,
+    stop_event:    multiprocessing.synchronize.Event,
+    pause_event:   multiprocessing.synchronize.Event,
+    config:        dict,
 ):
     """
     Phase 2 OS process.
@@ -592,6 +593,9 @@ def _monitoring_process_target(
             if not ret:
                 time.sleep(0.1)
                 continue
+
+            # Push preview frame to sidebar feed (best-effort, throttled by queue maxsize)
+            _put_preview_frame(preview_queue, frame)
 
             now = datetime.utcnow()
 
@@ -851,6 +855,7 @@ class CameraMonitor:
             target=_monitoring_process_target,
             args=(
                 self._event_queue,
+                self._preview_queue,
                 self._stop_event,
                 self._pause_event,
                 self._config,
@@ -863,6 +868,17 @@ class CameraMonitor:
             "Monitoring process started (PID %d)",
             self._monitoring_process.pid,
         )
+
+        # Restart preview reader thread for Phase 2 so sidebar feed stays live.
+        # _stop_preview_pump_and_join() already stopped it after liveness passed.
+        self._preview_running = True
+        self._preview_thread = threading.Thread(
+            target=self._read_preview_queue,
+            daemon=True,
+            name="MonitoringPreviewReader",
+        )
+        self._preview_thread.start()
+        logger.info("Monitoring preview reader thread started")
 
     def pause(self):
         """Pause monitoring during exam pause."""

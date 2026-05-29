@@ -47,6 +47,18 @@ class AnswerReviewRequest(BaseModel):
     examiner_score: Optional[float] = None
     examiner_comment: Optional[str] = None
 
+class FinalizeAnswer(BaseModel):
+    question_id: str
+    selected_option: Optional[str] = None
+    answer_text: Optional[str] = None
+
+
+class FinalizeSessionRequest(BaseModel):
+    reason: str = "manual_submit"
+    message: Optional[str] = None
+    client_time: Optional[datetime] = None
+    answers: List[FinalizeAnswer] = []
+
 
 class FinalizeAnswer(BaseModel):
     question_id: str
@@ -151,7 +163,7 @@ def start_session(
         exam_id=req.exam_id,
         student_id=current_user.id,
         status=SessionStatus.VERIFYING,  # Face verification happens first
-        started_at=None,
+        started_at=None,                 # Timer starts only after activation
     )
     db.add(session)
     db.commit()
@@ -241,6 +253,160 @@ def submit_session(
         "integrity_score": integrity_score,
         "integrity_recommendation": integrity_recommendation(integrity_score),
         "message": "Exam submitted successfully.",
+    }
+
+@router.post("/sessions/{session_id}/finalize")
+def finalize_session(
+    session_id: str,
+    req: FinalizeSessionRequest,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Finalizes a student exam attempt with the latest client-side answers.
+
+    Used for:
+      - manual submit
+      - timer expiry
+      - examiner end exam
+      - examiner terminate session
+      - server hard termination
+      - network lockdown timeout after reconnect
+
+    Unlike /submit, this endpoint accepts answers in the request body,
+    upserts them first, then grades/finalizes the session.
+    """
+    session = db.query(ExamSession).filter(
+        ExamSession.id == session_id,
+        ExamSession.student_id == current_user.id,
+    ).first()
+
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    reason = (req.reason or "manual_submit").strip().lower()
+
+    submitted_reasons = {
+        "manual_submit",
+        "time_up",
+        "examiner_end",
+    }
+
+    terminated_reasons = {
+        "examiner_terminate",
+        "server_terminate",
+        "network_timeout",
+    }
+
+    valid_reasons = submitted_reasons | terminated_reasons
+
+    if reason not in valid_reasons:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid finalize reason: {reason}",
+        )
+
+    # Idempotent behavior:
+    # If it is already submitted, do not mutate answers again.
+    # This protects against accidental late overwrite after a successful final submit.
+    if session.status == SessionStatus.SUBMITTED:
+        integrity_score = refresh_integrity_score(session_id, db)
+        db.commit()
+        return {
+            "session_id": session.id,
+            "status": session.status,
+            "submitted_at": session.submitted_at,
+            "terminated_at": session.terminated_at,
+            "termination_reason": session.termination_reason,
+            "mcq_score": session.mcq_score,
+            "integrity_score": integrity_score,
+            "integrity_recommendation": integrity_recommendation(integrity_score),
+            "message": "Session already finalized.",
+        }
+
+    # Allow finalization from active/locked sessions.
+    # Also allow TERMINATED because examiner/server termination may hit backend
+    # before the student client gets a chance to upload final local answers.
+    allowed_statuses = {
+        SessionStatus.ACTIVE,
+        SessionStatus.LOCKED,
+        SessionStatus.TERMINATED,
+    }
+
+    if session.status not in allowed_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot finalize session with status: {session.status}",
+        )
+
+    # Validate that submitted answers belong to this exam.
+    questions = db.query(Question).filter(
+        Question.exam_id == session.exam_id
+    ).all()
+    question_ids = {q.id for q in questions}
+
+    now = datetime.utcnow()
+
+    for item in req.answers:
+        if item.question_id not in question_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Question does not belong to this exam: {item.question_id}",
+            )
+
+        answer = db.query(Answer).filter(
+            Answer.session_id == session.id,
+            Answer.question_id == item.question_id,
+        ).first()
+
+        if not answer:
+            answer = Answer(
+                session_id=session.id,
+                question_id=item.question_id,
+            )
+            db.add(answer)
+
+        answer.selected_option = item.selected_option
+        answer.answer_text = item.answer_text
+        answer.last_updated_at = now
+
+    db.commit()
+
+    # Grade after answers are definitely in DB.
+    mcq_score = _grade_mcq(session_id, db)
+    integrity_score = refresh_integrity_score(session_id, db)
+
+    session.mcq_score = mcq_score
+
+    # Final status decision.
+    # If backend already marked it TERMINATED, keep it terminated.
+    if session.status == SessionStatus.TERMINATED:
+        session.terminated_at = session.terminated_at or now
+        session.termination_reason = session.termination_reason or req.message or reason
+        session.submitted_at = session.submitted_at or now
+
+    elif reason in submitted_reasons:
+        session.status = SessionStatus.SUBMITTED
+        session.submitted_at = now
+
+    else:
+        session.status = SessionStatus.TERMINATED
+        session.terminated_at = now
+        session.termination_reason = req.message or reason
+        session.submitted_at = now
+
+    db.commit()
+
+    return {
+        "session_id": session.id,
+        "status": session.status,
+        "submitted_at": session.submitted_at,
+        "terminated_at": session.terminated_at,
+        "termination_reason": session.termination_reason,
+        "mcq_score": mcq_score,
+        "integrity_score": integrity_score,
+        "integrity_recommendation": integrity_recommendation(integrity_score),
+        "message": "Session finalized successfully.",
     }
 
 
@@ -617,6 +783,10 @@ def get_exam_sessions(
         })
     return rows
 
+
+from fastapi import BackgroundTasks
+from server.websocket.manager import manager
+from shared.constants import WSMessageType
 
 @router.post("/sessions/{session_id}/terminate")
 def terminate_session(

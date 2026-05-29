@@ -778,6 +778,12 @@ class LoginUI(QWidget):
         except Exception:
             pass
 
+    def reset(self):
+        self.username.clear()
+        self.pw_field.clear()
+        self.policy_checkbox.setChecked(False)
+        self.set_status("", "")
+
     # ─────────────────────────────────────────────────────────────────────
     #  Thread management
     # ─────────────────────────────────────────────────────────────────────

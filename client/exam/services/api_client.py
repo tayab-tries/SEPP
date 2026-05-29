@@ -149,6 +149,20 @@ class ApiClient:
 
         return [self._map_access_request(row) for row in rows]
 
+    def get_recent_results(self, limit: int = 5) -> list[dict]:
+        """
+        Called by ExamsPage._load_page_data() for the RecentResults widget.
+
+        Backend route:
+            GET /results/recent
+        """
+        rows = self._request("GET", "/results/recent", params={"limit": limit}) or []
+
+        if not isinstance(rows, list):
+            raise RuntimeError("Unexpected recent attempts response.")
+
+        return [self._map_recent_result(row) for row in rows]
+
     def submit_access_code(self, code: str) -> dict:
         """
         Called when student submits exam join code.
@@ -348,6 +362,36 @@ class ApiClient:
             # Keep useful raw/backend fields too
             "approved": approved,
             "requested_at": requested_raw,
+            "raw": row,
+        }
+
+    def _map_recent_result(self, row: dict[str, Any]) -> dict:
+        submitted_raw = (
+            row.get("submitted_at")
+            or row.get("created_at")
+        )
+        
+        status = str(row.get("status") or "UNKNOWN")
+        if "." in status:
+            status = status.split(".")[-1]
+        status = status.replace("_", " ").upper()
+        
+        score_val = row.get("total_score")
+        if score_val is None:
+            score = 0
+        else:
+            try:
+                score = int(round(float(score_val)))
+            except (TypeError, ValueError):
+                score = 0
+
+        return {
+            "title": str(row.get("title") or row.get("exam_name") or "Unknown Exam"),
+            "date": self._format_date(submitted_raw).upper() if submitted_raw else "TBA",
+            "score": score,
+            "status": status,
+            "status_label": status,
+            "is_graded": row.get("is_graded", True),
             "raw": row,
         }
 

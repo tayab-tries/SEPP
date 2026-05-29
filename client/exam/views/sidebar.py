@@ -55,9 +55,7 @@ CARD_RADIUS      = 10
 _NAV_ITEMS: list[tuple[str, str]] = [
     ("⊞", "Dashboard"),
     ("☰", "Exams"),
-    ("◎", "Monitoring"),
     ("▦", "Reports"),
-    ("⚙", "Settings"),
 ]
 
 
@@ -130,6 +128,7 @@ class _NavItem(QWidget):
 # ──────────────────────────────────────────────────────────────────────────────
 class SidebarWidget(QWidget):
     nav_clicked = Signal(str)
+    sign_out_requested = Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -213,7 +212,10 @@ class SidebarWidget(QWidget):
         # ── Help / Sign Out ───────────────────────────────────────────────
         root.addWidget(self._bottom_btn("?   Help"))
         root.addSpacing(2)
-        root.addWidget(self._bottom_btn("⎋   Sign Out", red=True))
+        
+        self._sign_out_btn = self._bottom_btn("⎋   Sign Out", red=True)
+        self._sign_out_btn.clicked.connect(self.sign_out_requested.emit)
+        root.addWidget(self._sign_out_btn)
 
     # ── helpers ──────────────────────────────────────────────────────────
 
@@ -241,6 +243,5 @@ class SidebarWidget(QWidget):
         return btn
 
     def _on_item_clicked(self, label: str) -> None:
-        for item in self._nav_items:
-            item.set_active(item._label == label)
         self.nav_clicked.emit(label)
+

@@ -96,8 +96,23 @@ class HeartbeatManager(QObject):
     def stop(self):
         """Signal the heartbeat loop to stop and shut down the event loop."""
         self._running = False
+        
+        async def _shutdown():
+            if self._ws:
+                await self._ws.close()
+            # Cancel all tasks
+            for task in asyncio.all_tasks(self._loop):
+                if task is not asyncio.current_task():
+                    task.cancel()
+                    
         if self._loop and self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+            asyncio.run_coroutine_threadsafe(_shutdown(), self._loop)
+
+        # Wait for the background thread to finish so callers can safely
+        # destroy objects the thread references (prevents "QThread:
+        # Destroyed while thread is still running" on exam teardown).
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=5)
 
     def send_event_batch(self, events: list):
         """
@@ -163,6 +178,8 @@ class HeartbeatManager(QObject):
         asyncio.set_event_loop(self._loop)
         try:
             self._loop.run_until_complete(self._main())
+        except asyncio.CancelledError:
+            pass  # Clean shutdown — stop() cancelled our tasks
         finally:
             self._loop.close()
 
@@ -201,6 +218,10 @@ class HeartbeatManager(QObject):
                         self._heartbeat_loop(ws),
                         self._listen_loop(ws),
                     )
+
+            except asyncio.CancelledError:
+                self._ws = None
+                return  # Clean shutdown — stop() cancelled our tasks
 
             except (websockets.ConnectionClosed, OSError, Exception):
                 self._ws = None
