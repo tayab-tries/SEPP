@@ -116,10 +116,10 @@ class InfoDialog(QDialog):
 
         if body:
             body_lbl = QLabel(body)
-        body_lbl.setWordWrap(True)
-        body_lbl.setStyleSheet(
-            f"color:{T_PRIMARY}; font-size:13px; background:transparent;"
-        )
+            body_lbl.setWordWrap(True)
+            body_lbl.setStyleSheet(
+                f"color:{T_PRIMARY}; font-size:13px; background:transparent;"
+            )
             self.body_lay.addWidget(body_lbl)
 
         # ── Two-button row (only when confirm_label is provided) ──────────────

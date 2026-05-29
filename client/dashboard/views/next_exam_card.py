@@ -5,7 +5,7 @@ from datetime import datetime
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QSizePolicy,
 )
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCursor
 
 from client.dashboard.services.api_client import ApiClient
@@ -304,6 +304,7 @@ class NextExamCard(QWidget):
 
     # ── Timer ─────────────────────────────────────────────────────────────
 
+    @Slot()
     def _tick(self) -> None:
         if self._target_dt is None:
             self._countdown_lbl.setText("--:--:--")
@@ -317,3 +318,12 @@ class NextExamCard(QWidget):
         h, rem = divmod(total, 3600)
         m, s   = divmod(rem, 60)
         self._countdown_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        self._timer.stop()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._target_dt is not None:
+            self._timer.start(1000)

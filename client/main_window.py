@@ -10,7 +10,7 @@ from typing import Optional
 
 import requests
 from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
-from PySide6.QtCore import Qt, QTimer, QSettings
+from PySide6.QtCore import Qt, QTimer, QSettings, QCoreApplication
 from PySide6.QtGui import QKeyEvent, QCloseEvent
 
 from client.modules.common.loading_spinner import SpinnerOverlay
@@ -578,9 +578,11 @@ class MainWindow(QMainWindow):
             self._stack.setCurrentIndex(
                 PAGE_EXAMS if self._exams_page is not None else PAGE_STUDENT_DASHBOARD
             )
-            index = self._stack.indexOf(exam_page)
-            if index != -1:
-                self._stack.removeWidget(exam_page)
+            # Do NOT call removeWidget — it reparents the ExamWindow (a QMainWindow)
+            # to null, making it a top-level window whose destruction triggers Qt's
+            # quitOnLastWindowClosed logic and kills the entire application.
+            # deleteLater() cleanly removes it from the stack on the next event-loop tick.
+            exam_page.hide()
             exam_page.deleteLater()
             if self._active_exam_window is exam_page:
                 self._active_exam_window = None
@@ -676,6 +678,8 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         super().closeEvent(event)
+        if event.isAccepted():
+            QCoreApplication.quit()
 
     # ── Debug exit ─────────────────────────────────────────────────────────
 

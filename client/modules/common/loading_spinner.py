@@ -17,7 +17,7 @@ Or use the overlay version which dims the parent:
 
 import math
 from PySide6.QtWidgets import QWidget
-from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtCore import Qt, QTimer, QRectF, Slot
 from PySide6.QtGui import QPainter, QColor, QPen
 
 
@@ -65,6 +65,7 @@ class LoadingSpinner(QWidget):
         self._timer.stop()
         super().hide()
 
+    @Slot()
     def _tick(self):
         self._angle = (self._angle + self._speed) % 360
         self.update()

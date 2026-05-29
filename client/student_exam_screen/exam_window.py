@@ -194,6 +194,12 @@ class ExamWindow(QMainWindow):
         self.embedded = embedded
         if not self.embedded:
             self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        else:
+            # Prevent this QMainWindow from triggering quitOnLastWindowClosed
+            # when it's removed from the host QStackedWidget (which reparents
+            # it to null, making it a top-level window whose destruction would
+            # otherwise cause QApplication to quit).
+            self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.session       = session
         self.exam          = exam
         self.questions     = [normalize_question_payload(q) for q in questions]

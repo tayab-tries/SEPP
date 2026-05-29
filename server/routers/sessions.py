@@ -667,10 +667,15 @@ def get_exam_sessions(
     return rows
 
 
+from fastapi import BackgroundTasks
+from server.websocket.manager import manager
+from shared.constants import WSMessageType
+
 @router.post("/sessions/{session_id}/terminate")
 def terminate_session(
     session_id: str,
     req: TerminateSessionRequest,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(require_examiner),
     db: Session = Depends(get_db),
 ):
@@ -690,6 +695,27 @@ def terminate_session(
     session.termination_reason = req.reason
     integrity_score = refresh_integrity_score(session_id, db)
     db.commit()
+
+    # Broadcast termination to the student UI
+    background_tasks.add_task(
+        manager.send_to_student,
+        session_id,
+        {
+            "type": WSMessageType.EXAMINER_TERMINATE,
+            "reason": req.reason,
+        }
+    )
+    # Broadcast to other examiners
+    background_tasks.add_task(
+        manager.broadcast_to_examiners,
+        session.exam_id,
+        {
+            "type": WSMessageType.STUDENT_STATUS_UPDATE,
+            "session_id": session_id,
+            "state": SessionStatus.TERMINATED.value,
+            "reason": req.reason,
+        }
+    )
 
     return {
         "session_id": session_id,

@@ -56,6 +56,7 @@ def create_app() -> QApplication:
     app.setApplicationVersion("1.0.0")
     app.setOrganizationName("ExamApp")
     app.setStyle("Fusion")
+    app.setQuitOnLastWindowClosed(False)
     return app
 
 
