@@ -288,8 +288,14 @@ class MainWindow(QMainWindow):
                 raise RuntimeError(str(e))
 
         self._val_worker = ApiWorker(_http_val, token, base_url)
-        self._val_worker.finished.connect(lambda user: self._on_token_validated(token, user))
-        self._val_worker.errored.connect(self._on_token_invalid)
+        self._val_worker.finished.connect(
+            lambda user: self._on_token_validated(token, user),
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._val_worker.errored.connect(
+            self._on_token_invalid,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._val_worker.start()
 
     def _on_token_validated(self, token: str, user: dict):
@@ -667,8 +673,14 @@ class MainWindow(QMainWindow):
             self._nav_spinner.hide()
             self._show_info_dialog("Review Error", f"Could not load review data:\n{msg}")
 
-        self._review_worker.finished.connect(on_success)
-        self._review_worker.errored.connect(on_error)
+        self._review_worker.finished.connect(
+            on_success,
+            Qt.ConnectionType.QueuedConnection,
+        )
+        self._review_worker.errored.connect(
+            on_error,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self._review_worker.start()
 
     def closeEvent(self, event: QCloseEvent):
