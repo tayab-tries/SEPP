@@ -14,10 +14,10 @@ Handles the lifecycle of a student's exam attempt:
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func, or_
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from server.database import get_db
 from server.models.models import Exam, ExamSession, Enrollment, Answer, Question, Class, ProctoringEvent, ExamAccessRequest
@@ -29,7 +29,8 @@ from server.services.integrity import (
     refresh_essay_score,
     refresh_integrity_score,
 )
-from shared.constants import ExamStatus, SessionStatus, Role
+from server.websocket.manager import manager
+from shared.constants import ExamStatus, SessionStatus, Role, QuestionType, WSMessageType
 
 router = APIRouter(tags=["sessions"])
 
@@ -45,6 +46,19 @@ class TerminateSessionRequest(BaseModel):
 class AnswerReviewRequest(BaseModel):
     examiner_score: Optional[float] = None
     examiner_comment: Optional[str] = None
+
+
+class FinalizeAnswer(BaseModel):
+    question_id: str
+    selected_option: Optional[str] = None
+    answer_text: Optional[str] = None
+
+
+class FinalizeSessionRequest(BaseModel):
+    reason: str = "manual_submit"
+    message: Optional[str] = None
+    client_time: Optional[datetime] = None
+    answers: List[FinalizeAnswer] = Field(default_factory=list)
 
 
 # ── Student Routes ─────────────────────────────────────────────────────────
@@ -137,7 +151,7 @@ def start_session(
         exam_id=req.exam_id,
         student_id=current_user.id,
         status=SessionStatus.VERIFYING,  # Face verification happens first
-        started_at=datetime.utcnow(),
+        started_at=None,
     )
     db.add(session)
     db.commit()
@@ -177,6 +191,7 @@ def activate_session(
         )
 
     session.status = SessionStatus.ACTIVE
+    session.started_at = datetime.utcnow()
     db.commit()
 
     return {
@@ -226,6 +241,111 @@ def submit_session(
         "integrity_score": integrity_score,
         "integrity_recommendation": integrity_recommendation(integrity_score),
         "message": "Exam submitted successfully.",
+    }
+
+
+@router.post("/sessions/{session_id}/finalize")
+def finalize_session(
+    session_id: str,
+    req: FinalizeSessionRequest,
+    current_user: User = Depends(require_student),
+    db: Session = Depends(get_db),
+):
+    """
+    Finalize a session with the latest client-side answers.
+
+    Used for manual submit, timer expiry, examiner end, terminate, or reconnect recovery.
+    """
+    session = db.query(ExamSession).filter(
+        ExamSession.id == session_id,
+        ExamSession.student_id == current_user.id,
+    ).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    reason = (req.reason or "manual_submit").strip().lower()
+    submitted_reasons = {"manual_submit", "time_up", "examiner_end"}
+    terminated_reasons = {"examiner_terminate", "server_terminate", "network_timeout"}
+    valid_reasons = submitted_reasons | terminated_reasons
+
+    if reason not in valid_reasons:
+        raise HTTPException(status_code=422, detail=f"Invalid finalize reason: {reason}")
+
+    if session.status == SessionStatus.SUBMITTED:
+        integrity_score = refresh_integrity_score(session_id, db)
+        db.commit()
+        return {
+            "session_id": session.id,
+            "status": session.status,
+            "submitted_at": session.submitted_at,
+            "terminated_at": session.terminated_at,
+            "termination_reason": session.termination_reason,
+            "mcq_score": session.mcq_score,
+            "integrity_score": integrity_score,
+            "integrity_recommendation": integrity_recommendation(integrity_score),
+            "message": "Session already finalized.",
+        }
+
+    if session.status not in {SessionStatus.ACTIVE, SessionStatus.LOCKED, SessionStatus.TERMINATED}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot finalize session with status: {session.status}",
+        )
+
+    questions = db.query(Question).filter(Question.exam_id == session.exam_id).all()
+    question_ids = {q.id for q in questions}
+    now = datetime.utcnow()
+
+    for item in req.answers:
+        if item.question_id not in question_ids:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Question does not belong to this exam: {item.question_id}",
+            )
+
+        answer = db.query(Answer).filter(
+            Answer.session_id == session.id,
+            Answer.question_id == item.question_id,
+        ).first()
+        if not answer:
+            answer = Answer(session_id=session.id, question_id=item.question_id)
+            db.add(answer)
+
+        answer.selected_option = item.selected_option
+        answer.answer_text = item.answer_text
+        answer.last_updated_at = now
+
+    db.commit()
+
+    mcq_score = _grade_mcq(session_id, db)
+    integrity_score = refresh_integrity_score(session_id, db)
+    session.mcq_score = mcq_score
+
+    if session.status == SessionStatus.TERMINATED:
+        session.terminated_at = session.terminated_at or now
+        session.termination_reason = session.termination_reason or req.message or reason
+        session.submitted_at = session.submitted_at or now
+    elif reason in submitted_reasons:
+        session.status = SessionStatus.SUBMITTED
+        session.submitted_at = now
+    else:
+        session.status = SessionStatus.TERMINATED
+        session.terminated_at = now
+        session.termination_reason = req.message or reason
+        session.submitted_at = now
+
+    db.commit()
+
+    return {
+        "session_id": session.id,
+        "status": session.status,
+        "submitted_at": session.submitted_at,
+        "terminated_at": session.terminated_at,
+        "termination_reason": session.termination_reason,
+        "mcq_score": mcq_score,
+        "integrity_score": integrity_score,
+        "integrity_recommendation": integrity_recommendation(integrity_score),
+        "message": "Session finalized successfully.",
     }
 
 
@@ -282,7 +402,7 @@ def get_my_history(
     rows = (
         db.query(ExamSession, Exam, Class)
         .join(Exam, Exam.id == ExamSession.exam_id)
-        .join(Class, Class.id == Exam.class_id)
+        .outerjoin(Class, Class.id == Exam.class_id)
         .filter(ExamSession.student_id == current_user.id)
         .order_by(ExamSession.started_at.desc(), ExamSession.submitted_at.desc())
         .all()
@@ -293,12 +413,16 @@ def get_my_history(
         mcq_score = float(session.mcq_score) if session.mcq_score is not None else 0.0
         essay_score = float(session.essay_score) if session.essay_score is not None else 0.0
         total_score = round(mcq_score + essay_score, 2)
+        questions = db.query(Question).filter(Question.exam_id == session.exam_id).all()
+        has_essays = any(q.question_type == QuestionType.ESSAY for q in questions)
+        max_marks = sum(q.marks for q in questions)
+        is_graded = session.essay_score is not None if has_essays else True
         history.append(
             {
                 "session_id": session.id,
                 "exam_id": exam.id,
                 "class_id": exam.class_id,
-                "class_name": class_.name,
+                "class_name": class_.name if class_ else "Unknown class",
                 "exam_title": exam.title,
                 "exam_status": exam.status,
                 "session_status": session.status,
@@ -309,8 +433,10 @@ def get_my_history(
                 "mcq_score": session.mcq_score,
                 "essay_score": session.essay_score,
                 "total_score": total_score,
+                "max_marks": max_marks,
                 "integrity_score": session.integrity_score,
                 "integrity_recommendation": integrity_recommendation(session.integrity_score),
+                "is_graded": is_graded,
             }
         )
 
@@ -496,6 +622,7 @@ def get_exam_sessions(
 def terminate_session(
     session_id: str,
     req: TerminateSessionRequest,
+    background_tasks: BackgroundTasks = None,
     current_user: User = Depends(require_examiner),
     db: Session = Depends(get_db),
 ):
@@ -515,6 +642,32 @@ def terminate_session(
     session.termination_reason = req.reason
     integrity_score = refresh_integrity_score(session_id, db)
     db.commit()
+
+    termination_message = {
+        "type": WSMessageType.EXAMINER_TERMINATE,
+        "reason": req.reason,
+    }
+    status_update = {
+        "type": WSMessageType.STUDENT_STATUS_UPDATE,
+        "session_id": session_id,
+        "state": SessionStatus.TERMINATED.value,
+        "reason": req.reason,
+    }
+
+    if background_tasks is not None:
+        background_tasks.add_task(manager.send_to_student, session_id, termination_message)
+        background_tasks.add_task(manager.broadcast_to_examiners, session.exam_id, status_update)
+    else:
+        import asyncio
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None:
+            loop.create_task(manager.send_to_student(session_id, termination_message))
+            loop.create_task(manager.broadcast_to_examiners(session.exam_id, status_update))
 
     return {
         "session_id": session_id,

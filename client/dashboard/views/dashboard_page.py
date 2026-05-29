@@ -445,6 +445,20 @@ class DashboardPage(QWidget):
             self._workers.remove(worker)
         worker.deleteLater()
 
+    def shutdown(self) -> None:
+        """Stop worker threads before the widget is destroyed."""
+        for worker in list(self._workers):
+            try:
+                if worker.isRunning() and not worker.wait(2000):
+                    worker.terminate()
+                    worker.wait(2000)
+            except Exception:
+                pass
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+        self._workers.clear()
 
     def _load_dashboard_data(self) -> None:
         self._exam_card.set_loading()

@@ -108,6 +108,7 @@ class ConnectionManager:
         websocket: WebSocket,
         session_id: str,
         exam_id: str,
+        expected_student_id: Optional[str] = None,
     ) -> bool:
         """
         Accept connection, authenticate via first message.
@@ -117,6 +118,10 @@ class ConnectionManager:
 
         payload = await self.authenticate(websocket)
         if payload is None:
+            return False
+
+        if expected_student_id is not None and payload.get("sub") != expected_student_id:
+            await websocket.close(code=4003, reason="Session ownership mismatch")
             return False
 
         self.student_connections[session_id] = websocket
@@ -141,6 +146,7 @@ class ConnectionManager:
         self,
         websocket: WebSocket,
         exam_id: str,
+        expected_examiner_id: Optional[str] = None,
     ) -> bool:
         """
         Accept examiner connection, authenticate via first message.
@@ -155,6 +161,10 @@ class ConnectionManager:
         # Verify role is examiner
         if payload.get("role") != "examiner":
             await websocket.close(code=4003, reason="Examiner access required")
+            return False
+
+        if expected_examiner_id is not None and payload.get("sub") != expected_examiner_id:
+            await websocket.close(code=4003, reason="Not allowed to monitor this exam")
             return False
 
         if exam_id not in self.examiner_connections:
@@ -237,6 +247,8 @@ class ConnectionManager:
         msg_type = data.get("type")
 
         if msg_type == WSMessageType.HEARTBEAT:
+            from server.models.models import ExamSession, Exam
+
             client_time_str = data.get("client_time")
             client_time = (
                 datetime.fromisoformat(client_time_str)
@@ -254,10 +266,34 @@ class ConnectionManager:
                     "drift_seconds": drift,
                 })
 
+            server_now = datetime.utcnow()
+
             await self.send_to_student(session_id, {
                 "type": WSMessageType.CONNECTIVITY_ACK,
-                "server_time": datetime.utcnow().isoformat(),
+                "server_time": server_now.isoformat(),
             })
+
+            session = db.query(ExamSession).filter(
+                ExamSession.id == session_id,
+                ExamSession.exam_id == exam_id,
+            ).first()
+
+            if session and session.started_at:
+                exam = db.query(Exam).filter(Exam.id == session.exam_id).first()
+                if exam and exam.duration_minutes:
+                    from datetime import timedelta
+
+                    exam_end_time = session.started_at + timedelta(
+                        minutes=int(exam.duration_minutes)
+                    )
+
+                    await self.send_to_student(session_id, {
+                        "type": WSMessageType.TIME_SYNC,
+                        "server_time": server_now.isoformat(),
+                        "exam_started_at": session.started_at.isoformat(),
+                        "exam_end_time": exam_end_time.isoformat(),
+                        "duration_minutes": exam.duration_minutes,
+                    })
 
         elif msg_type == WSMessageType.EVENT_BATCH:
             events = data.get("events", [])
@@ -279,6 +315,7 @@ class ConnectionManager:
         websocket: WebSocket,
         exam_id: str,
         data: dict,
+        db=None,
     ):
         """Route an incoming WebSocket message from an authenticated examiner."""
         msg_type = data.get("type")
@@ -286,15 +323,43 @@ class ConnectionManager:
         if msg_type == WSMessageType.EXAMINER_TERMINATE:
             target_session: str | None = data.get("session_id")
             reason: str = data.get("reason", "Examiner terminated session")
+
             if not target_session:
                 return
+
+            if db is not None:
+                from server.models.models import ExamSession
+                from server.services.integrity import refresh_integrity_score
+                from shared.constants import SessionStatus
+
+                session = db.query(ExamSession).filter(
+                    ExamSession.id == target_session,
+                    ExamSession.exam_id == exam_id,
+                ).first()
+
+                if session and session.status not in (
+                    SessionStatus.SUBMITTED,
+                    SessionStatus.TERMINATED,
+                ):
+                    session.status = SessionStatus.TERMINATED
+                    session.terminated_at = datetime.utcnow()
+                    session.termination_reason = reason
+                    refresh_integrity_score(session.id, db)
+                    db.commit()
+
+                    await self.broadcast_to_examiners(exam_id, {
+                        "type": WSMessageType.STUDENT_STATUS_UPDATE,
+                        "session_id": target_session,
+                        "state": SessionStatus.TERMINATED.value,
+                        "reason": reason,
+                    })
+
             await self.send_to_student(target_session, {
                 "type": WSMessageType.EXAMINER_TERMINATE,
                 "reason": reason,
             })
 
         elif msg_type == WSMessageType.EXAM_PAUSE:
-            # Fixed: only pause students in THIS exam, not all exams
             await self.broadcast_to_exam_students(exam_id, {
                 "type": WSMessageType.EXAM_PAUSE,
             })
@@ -375,25 +440,49 @@ class ConnectionManager:
         })
 
     async def _sync_answers(self, session_id: str, answers: list, db):
-        """Upsert student answers from local cache to the server."""
-        from server.models.models import Answer
+        """
+        Upsert student answers from local cache to the server.
+
+        Only accepts answers for questions that belong to this session's exam.
+        """
+        from server.models.models import Answer, ExamSession, Question
+
+        session = db.query(ExamSession).filter(
+            ExamSession.id == session_id,
+        ).first()
+        if not session:
+            return
+
+        valid_question_ids = {
+            row[0]
+            for row in db.query(Question.id).filter(
+                Question.exam_id == session.exam_id,
+            ).all()
+        }
+
+        now = datetime.utcnow()
 
         for ans_data in answers:
+            question_id = ans_data.get("question_id")
+            if not question_id or question_id not in valid_question_ids:
+                continue
+
             existing = db.query(Answer).filter(
                 Answer.session_id == session_id,
-                Answer.question_id == ans_data["question_id"],
+                Answer.question_id == question_id,
             ).first()
 
             if existing:
                 existing.answer_text = ans_data.get("answer_text")
                 existing.selected_option = ans_data.get("selected_option")
-                existing.last_updated_at = datetime.utcnow()
+                existing.last_updated_at = now
             else:
                 answer = Answer(
                     session_id=session_id,
-                    question_id=ans_data["question_id"],
+                    question_id=question_id,
                     answer_text=ans_data.get("answer_text"),
                     selected_option=ans_data.get("selected_option"),
+                    last_updated_at=now,
                 )
                 db.add(answer)
 

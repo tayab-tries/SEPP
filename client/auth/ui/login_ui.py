@@ -769,6 +769,15 @@ class LoginUI(QWidget):
         if self._spinner is not None:
             self._spinner.setGeometry(self.rect())
 
+    def shutdown(self) -> None:
+        lat_thread = getattr(self, "_lat_thread", None)
+        if lat_thread is None:
+            return
+        try:
+            lat_thread.stop()
+        except Exception:
+            pass
+
     # ─────────────────────────────────────────────────────────────────────
     #  Thread management
     # ─────────────────────────────────────────────────────────────────────
@@ -796,7 +805,7 @@ class LoginUI(QWidget):
                 f"font-size:13px; font-weight:600; color:{RED}; border:none; background:transparent;")
 
     def closeEvent(self, event):
-        self._lat_thread.stop()
+        self.shutdown()
         event.accept()
 
 

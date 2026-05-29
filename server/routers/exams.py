@@ -31,7 +31,7 @@ from pydantic import BaseModel
 from server.database import get_db
 from server.models.models import Class, Enrollment, Exam, Question, User, ExamSession, ExamAccessRequest
 from server.dependencies import get_current_user, require_examiner, require_student
-from shared.constants import ExamStatus, QuestionType, Role
+from shared.constants import ExamStatus, QuestionType, Role, SessionStatus
 
 router = APIRouter(tags=["exams"])
 
@@ -574,6 +574,12 @@ def list_upcoming_assessments(
         .filter(
             or_(*access_filters),
             Exam.status != ExamStatus.CLOSED,
+            ~Exam.id.in_(
+                db.query(ExamSession.exam_id).filter(
+                    ExamSession.student_id == current_user.id,
+                    ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED]),
+                )
+            ),
         )
         .order_by(
             case(
@@ -622,6 +628,12 @@ def get_next_exam(
         .filter(
             or_(*access_filters),
             Exam.status == ExamStatus.LIVE,
+            ~Exam.id.in_(
+                db.query(ExamSession.exam_id).filter(
+                    ExamSession.student_id == current_user.id,
+                    ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED]),
+                )
+            ),
         )
         .order_by(Exam.scheduled_start.asc())
         .first()
@@ -636,6 +648,12 @@ def get_next_exam(
             or_(*access_filters),
             Exam.status == ExamStatus.SCHEDULED,
             Exam.scheduled_start.isnot(None),
+            ~Exam.id.in_(
+                db.query(ExamSession.exam_id).filter(
+                    ExamSession.student_id == current_user.id,
+                    ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED]),
+                )
+            ),
         )
         .order_by(Exam.scheduled_start.asc())
         .first()
@@ -948,11 +966,34 @@ def get_questions(
     if not exam:
         raise HTTPException(status_code=404, detail="Exam not found")
 
+    if current_user.role == Role.EXAMINER:
+        if exam.creator_id != current_user.id:
+            raise HTTPException(status_code=403, detail="Not allowed to view this exam")
+    else:
+        approved_class_ids, approved_exam_ids = get_student_access_ids(current_user, db)
+        has_access = exam.class_id in approved_class_ids or exam.id in approved_exam_ids
+        has_session = db.query(ExamSession).filter(
+            ExamSession.exam_id == exam_id,
+            ExamSession.student_id == current_user.id,
+        ).first()
+        if not has_access and not has_session:
+            raise HTTPException(status_code=403, detail="You do not have access to this exam")
+
     questions = db.query(Question).filter(
         Question.exam_id == exam_id
     ).order_by(Question.order_index).all()
 
     is_examiner = (current_user.role) == Role.EXAMINER
+    show_correct = is_examiner
+
+    if not is_examiner:
+        completed = db.query(ExamSession).filter(
+            ExamSession.exam_id == exam_id,
+            ExamSession.student_id == current_user.id,
+            ExamSession.status.in_([SessionStatus.SUBMITTED, SessionStatus.TERMINATED]),
+        ).first()
+        if completed:
+            show_correct = True
 
     return [
         {
@@ -962,7 +1003,7 @@ def get_questions(
             "text": q.text,
             "marks": q.marks,
             "options": q.options,
-            "correct_option": q.correct_option if is_examiner else None,
+            "correct_option": q.correct_option if show_correct else None,
             "max_words": q.max_words,
             "min_words": q.min_words,
         }
@@ -1042,7 +1083,12 @@ def list_recent_results(
             "mcq_score": s.mcq_score,
             "essay_score": s.essay_score,
             "total_score": (s.mcq_score or 0) + (s.essay_score or 0),
+            "max_marks": sum(q.marks for q in db.query(Question).filter(Question.exam_id == s.exam_id).all()),
             "integrity_score": s.integrity_score,
+            "is_graded": True if not db.query(Question).filter(
+                Question.exam_id == s.exam_id,
+                Question.question_type == QuestionType.ESSAY,
+            ).count() else s.essay_score is not None,
 
             "status": s.status.value if hasattr(s.status, "value") else str(s.status),
         }

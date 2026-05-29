@@ -514,9 +514,10 @@ class ExamWindow(QMainWindow):
         self._skip_activate_worker = ApiWorker(
             _http_activate_session, self.token, BASE_URL, self.session_id
         )
-        self._skip_activate_worker.finished.connect(self._on_skip_activate_result)
+        self._skip_activate_worker.finished.connect(self._on_skip_activate_result, Qt.ConnectionType.QueuedConnection)
         self._skip_activate_worker.errored.connect(
-            lambda e: self._on_activation_failed("Network error while activating the exam session.")
+            lambda e: self._on_activation_failed("Network error while activating the exam session."),
+            Qt.ConnectionType.QueuedConnection
         )
         self._skip_activate_worker.start()
 
@@ -564,9 +565,9 @@ class ExamWindow(QMainWindow):
             base_url=BASE_URL,
             camera_index=CAMERA_INDEX,
         )
-        self._entry_verify_worker.verified.connect(self._on_entry_verified)
-        self._entry_verify_worker.liveness_failed.connect(self._handle_liveness_failure)
-        self._entry_verify_worker.activation_failed.connect(self._on_activation_failed)
+        self._entry_verify_worker.verified.connect(self._on_entry_verified, Qt.ConnectionType.QueuedConnection)
+        self._entry_verify_worker.liveness_failed.connect(self._handle_liveness_failure, Qt.ConnectionType.QueuedConnection)
+        self._entry_verify_worker.activation_failed.connect(self._on_activation_failed, Qt.ConnectionType.QueuedConnection)
         self._entry_verify_worker.start()
 
     @Slot()
@@ -693,6 +694,7 @@ class ExamWindow(QMainWindow):
         self.heartbeat.send_session_state(SessionStatus.TERMINATED.value)
         self._save_current_answer()
         QMessageBox.critical(self, "Session Terminated", reason)
+        self._finalize_session("server_terminate")
         self._finish_exam()
 
     # ── Examiner commands ──────────────────────────────────────────────────
@@ -706,7 +708,7 @@ class ExamWindow(QMainWindow):
             self._sig_nav_enabled.emit(False, False, False)
             self.camera_monitor.pause()
         elif msg_type == WSMessageType.EXAM_END:
-            self._submit_exam(forced=True)
+            self._submit_exam(forced=True, finalize_reason="examiner_end")
         elif msg_type == WSMessageType.TIME_SYNC:
             end_time_str = msg.get("exam_end_time")
             if end_time_str:
@@ -718,7 +720,7 @@ class ExamWindow(QMainWindow):
     # ── Submission ─────────────────────────────────────────────────────────
 
     @Slot()
-    def _submit_exam(self, forced: bool = False):
+    def _submit_exam(self, forced: bool = False, finalize_reason: str = "manual_submit"):
         if not forced:
             reply = QMessageBox.question(
                 self, "Submit Exam",
@@ -729,42 +731,40 @@ class ExamWindow(QMainWindow):
             if reply != QMessageBox.StandardButton.Yes:
                 return
 
-        self._save_current_answer()
-        self._sync_answers_now()
-
-        try:
-            resp = requests.post(
-                f"{BASE_URL}/sessions/{self.session_id}/submit",
-                headers={"Authorization": f"Bearer {self.token}"},
-                timeout=10,
-            )
-            if resp.status_code == 200:
-                mcq_score = resp.json().get("mcq_score", 0)
-                QMessageBox.information(
-                    self, "Exam Submitted",
-                    f"Exam submitted successfully.\nMCQ score: {mcq_score} marks",
-                )
-            else:
-                QMessageBox.warning(
-                    self, "Submission Warning",
-                    "Answers saved locally but server submission failed.\n"
-                    "Contact your examiner.",
-                )
-        except requests.RequestException:
+        ok, result = self._finalize_session(finalize_reason)
+        submitted_reasons = {"manual_submit", "time_up", "examiner_end"}
+        if ok:
+            mcq_score = int((result or {}).get("mcq_score", 0) or 0)
+            title, message = self._finalize_success_message(finalize_reason, mcq_score)
+            QMessageBox.information(self, title, message)
+        else:
             QMessageBox.warning(
-                self, "Submission Warning",
-                "Network error. Answers saved locally. Contact your examiner.",
+                self,
+                self._finalize_dialog_title(finalize_reason),
+                self._finalize_failure_message(finalize_reason, str(result)),
             )
 
+        event_type = (
+            EventType.EXAM_SUBMITTED
+            if finalize_reason in submitted_reasons
+            else EventType.SESSION_TERMINATED
+        )
         self.event_logger.log(ProctoringEvent(
-            event_type=EventType.EXAM_SUBMITTED,
+            event_type=event_type,
             severity=EventSeverity.INFO,
             timestamp=datetime.utcnow(),
-            metadata={"session_id": self.session_id},
+            metadata={
+                "session_id": self.session_id,
+                "finalize_reason": finalize_reason,
+            },
         ))
 
         self._terminated = True
-        self.heartbeat.send_session_state(SessionStatus.SUBMITTED.value)
+        self.heartbeat.send_session_state(
+            SessionStatus.SUBMITTED.value
+            if finalize_reason in submitted_reasons
+            else SessionStatus.TERMINATED.value
+        )
         self._finish_exam()
 
     # ── Countdown ──────────────────────────────────────────────────────────
@@ -774,7 +774,7 @@ class ExamWindow(QMainWindow):
             return
         remaining = (self._exam_end_time - datetime.utcnow()).total_seconds()
         if remaining <= 0:
-            self._submit_exam(forced=True)
+            self._submit_exam(forced=True, finalize_reason="time_up")
             return
         mins, secs = divmod(int(remaining), 60)
         self._sig_timer_update.emit(f"Time remaining: {mins:02d}:{secs:02d}")
@@ -846,6 +846,82 @@ class ExamWindow(QMainWindow):
         self.activity_monitor.stop()
         self.cache.close()
         logger.info("ExamWindow cleanup complete")
+
+    def _finalize_session(self, reason: str) -> tuple[bool, dict | str]:
+        """
+        Persist the latest cached answers before ending the session.
+
+        The backend finalize endpoint accepts a full answer snapshot, so we send
+        the locally cached answers here instead of relying on the websocket sync
+        timing to have already flushed the most recent keystrokes.
+        """
+        self._save_current_answer()
+        self._sync_answers_now()
+        payload = {
+            "reason": reason,
+            "client_time": datetime.utcnow().isoformat(),
+            "answers": self.cache.get_all_answers(self.session_id),
+        }
+        try:
+            resp = requests.post(
+                f"{BASE_URL}/sessions/{self.session_id}/finalize",
+                headers={"Authorization": f"Bearer {self.token}"},
+                json=payload,
+                timeout=10,
+            )
+        except requests.RequestException as exc:
+            return False, str(exc)
+
+        if resp.status_code != 200:
+            return False, resp.text[:300]
+
+        try:
+            return True, resp.json() or {}
+        except ValueError:
+            return True, {}
+
+    def _finalize_dialog_title(self, reason: str) -> str:
+        if reason == "manual_submit":
+            return "Exam Submitted"
+        if reason == "time_up":
+            return "Time Expired"
+        if reason == "examiner_end":
+            return "Exam Ended"
+        return "Session Finalized"
+
+    def _finalize_success_message(self, reason: str, mcq_score: int) -> tuple[str, str]:
+        if reason == "manual_submit":
+            return (
+                "Exam Submitted",
+                f"Exam submitted successfully.\nMCQ score: {mcq_score} marks",
+            )
+        if reason == "time_up":
+            return (
+                "Time Expired",
+                f"Time expired. Answers were finalized.\nMCQ score: {mcq_score} marks",
+            )
+        if reason == "examiner_end":
+            return (
+                "Exam Ended",
+                f"Exam ended by examiner. Answers were finalized.\nMCQ score: {mcq_score} marks",
+            )
+        return (
+            "Session Finalized",
+            "Latest answers were saved and the session was finalized.",
+        )
+
+    def _finalize_failure_message(self, reason: str, detail: str) -> str:
+        detail = detail.strip()
+        if reason == "manual_submit":
+            prefix = "Answers saved locally but server submission failed."
+        elif reason in {"time_up", "examiner_end"}:
+            prefix = "Answers saved locally but server finalization failed."
+        else:
+            prefix = "Answers saved locally but session finalization failed."
+
+        if detail:
+            return f"{prefix}\n{detail}"
+        return f"{prefix}\nContact your examiner."
 
     def _finish_exam(self):
         """End the exam session and return to the host (embedded: student dashboard)."""

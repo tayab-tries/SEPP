@@ -5,6 +5,8 @@ Run with: uvicorn server.main:app --host 0.0.0.0 --port 8000 --reload
 """
 
 import asyncio
+import random
+import string
 from contextlib import asynccontextmanager
 from datetime import datetime
 
@@ -60,6 +62,54 @@ def _ensure_dev_schema():
             exam_columns = {column["name"] for column in inspector.get_columns("exams")}
             if "join_code" not in exam_columns:
                 conn.execute(text("ALTER TABLE exams ADD COLUMN join_code VARCHAR"))
+            _backfill_exam_join_codes(conn)
+
+
+def _generate_exam_join_code(length: int = 6) -> str:
+    return "".join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+
+def _backfill_exam_join_codes(conn) -> None:
+    """
+    Populate join_code for any existing exam rows created before the column
+    existed. This keeps old local databases usable with the exam-first flow.
+    """
+    rows = conn.execute(
+        text(
+            """
+            SELECT id
+            FROM exams
+            WHERE join_code IS NULL OR trim(join_code) = ''
+            """
+        )
+    ).fetchall()
+
+    if not rows:
+        return
+
+    existing_codes = {
+        code
+        for (code,) in conn.execute(
+            text(
+                """
+                SELECT join_code
+                FROM exams
+                WHERE join_code IS NOT NULL AND trim(join_code) != ''
+                """
+            )
+        ).fetchall()
+        if code
+    }
+
+    for (exam_id,) in rows:
+        code = _generate_exam_join_code()
+        while code in existing_codes:
+            code = _generate_exam_join_code()
+        existing_codes.add(code)
+        conn.execute(
+            text("UPDATE exams SET join_code = :code WHERE id = :exam_id"),
+            {"code": code, "exam_id": exam_id},
+        )
 
 
 async def heartbeat_monitor():
@@ -170,7 +220,12 @@ async def student_websocket(
         await websocket.close(code=4005, reason="Session is not active")
         return
 
-    authenticated = await manager.connect_student(websocket, session_id, exam_id)
+    authenticated = await manager.connect_student(
+        websocket,
+        session_id,
+        exam_id,
+        db_session.student_id,
+    )
     if not authenticated:
         return  # connect_student already closed the connection
 
@@ -202,14 +257,18 @@ async def examiner_websocket(
         await websocket.close(code=4004, reason="Exam not found")
         return
 
-    authenticated = await manager.connect_examiner(websocket, exam_id)
+    authenticated = await manager.connect_examiner(
+        websocket,
+        exam_id,
+        exam.creator_id,
+    )
     if not authenticated:
         return
 
     try:
         while True:
             data = await websocket.receive_json()
-            await manager.handle_examiner_message(websocket, exam_id, data)
+            await manager.handle_examiner_message(websocket, exam_id, data, db)
     except WebSocketDisconnect:
         manager.disconnect_examiner(websocket, exam_id)
 

@@ -69,6 +69,7 @@ class LoginWindow(QObject):
         self._worker.success.connect(self._on_success)
         self._worker.http_error.connect(self._on_http_error)
         self._worker.net_error.connect(self._on_net_error)
+        self._worker.finished.connect(self._on_worker_finished)
         self._worker.start()
 
     @Slot(dict)
@@ -102,3 +103,30 @@ class LoginWindow(QObject):
         else:
             logger.error("Login error: %s", kind)
             self._ui.set_status("Unexpected error.", "error")
+
+    @Slot()
+    def _on_worker_finished(self) -> None:
+        worker = self._worker
+        if worker is None:
+            return
+        if worker.isRunning():
+            return
+        self._worker = None
+        worker.deleteLater()
+
+    def shutdown(self) -> None:
+        worker = self._worker
+        if worker is None:
+            return
+
+        try:
+            if worker.isRunning():
+                worker.wait(2000)
+        except Exception:
+            logger.exception("Failed waiting for login worker shutdown")
+
+        self._worker = None
+        try:
+            worker.deleteLater()
+        except Exception:
+            pass

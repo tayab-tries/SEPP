@@ -323,6 +323,9 @@ class ExaminerDashboard(QWidget):
         self._session_generation = 0
         self._live_workers: set[ApiWorker] = set()
         self._overview_refresh_pending = False
+        self._my_exams_refresh_pending = False
+        self._access_requests_refresh_pending = False
+        self._access_requests_pending_exam_id = ""
 
         self._classes = QListWidget()
         self._my_exams = QListWidget()
@@ -433,6 +436,9 @@ class ExaminerDashboard(QWidget):
         self._selected_requests_exam_id = ""
         self._selected_requests_exam_title = ""
         self._active_exam_title = ""
+        self._my_exams_refresh_pending = False
+        self._access_requests_refresh_pending = False
+        self._access_requests_pending_exam_id = ""
         self._classes.clear()
         self._my_exams.clear()
         self._sessions.clear()
@@ -924,11 +930,13 @@ class ExaminerDashboard(QWidget):
         self._load_my_exams()
 
     def _load_my_exams(self):
-        self._my_exams.clear()
         if not self._token:
             return
         if self._worker_is_running("_my_exams_worker"):
+            self._my_exams_refresh_pending = True
             return
+        self._my_exams_refresh_pending = False
+        self._my_exams.clear()
         generation = self._session_generation
         self._my_exams_worker = self._track_worker(
             ApiWorker(_http_fetch_my_exams, self._headers()),
@@ -938,11 +946,7 @@ class ExaminerDashboard(QWidget):
             lambda result, gen=generation: gen == self._session_generation and self._apply_my_exams(result)
         )
         self._my_exams_worker.errored.connect(
-            lambda e, gen=generation: gen == self._session_generation and (
-                self._my_exams.addItem("Network error while loading exams."),
-                self._requests_page.set_exam_rows([]),
-                self._requests_page.set_status_message("Network error while loading owned exams."),
-            )
+            lambda e, gen=generation: gen == self._session_generation and self._on_my_exams_error()
         )
         self._my_exams_worker.start()
 
@@ -954,6 +958,7 @@ class ExaminerDashboard(QWidget):
             self._owned_exam_rows = []
             self._requests_page.set_exam_rows([])
             self._requests_page.set_busy(False)
+            self._maybe_refresh_my_exams()
             return
         rows = result["data"] or []
         self._owned_exam_rows = rows
@@ -961,6 +966,7 @@ class ExaminerDashboard(QWidget):
             self._my_exams.addItem("No exams yet. Create one inside a class.")
             self._requests_page.set_exam_rows([])
             self._requests_page.set_busy(False)
+            self._maybe_refresh_my_exams()
             return
         for row in rows:
             item = QListWidgetItem(
@@ -980,6 +986,18 @@ class ExaminerDashboard(QWidget):
                 self._load_exam_access_requests(self._selected_requests_exam_id)
             else:
                 self._requests_page.set_busy(False)
+        self._maybe_refresh_my_exams()
+
+    def _on_my_exams_error(self):
+        self._my_exams.addItem("Network error while loading exams.")
+        self._requests_page.set_exam_rows([])
+        self._requests_page.set_status_message("Network error while loading owned exams.")
+        self._maybe_refresh_my_exams()
+
+    def _maybe_refresh_my_exams(self):
+        if self._my_exams_refresh_pending:
+            self._my_exams_refresh_pending = False
+            QTimer.singleShot(0, self._load_my_exams)
 
     def _load_class_exams_for_selected(self):
         class_id = self._selected_class.get("class_id")
@@ -1152,19 +1170,29 @@ class ExaminerDashboard(QWidget):
     def _refresh_access_requests_page(self):
         self._requests_page.set_status_message("Refreshing exam access requests…")
         self._load_my_exams()
+        if self._selected_requests_exam_id:
+            self._load_exam_access_requests(self._selected_requests_exam_id)
 
     @Slot(str)
     def _load_exam_access_requests(self, exam_id: str):
         if not exam_id or not self._token:
             return
-        if self._worker_is_running("_access_requests_worker"):
-            return
-        self._selected_requests_exam_id = exam_id
         selected_row = next(
             (row for row in self._owned_exam_rows if str(row.get("exam_id") or "") == exam_id),
             {},
         )
+        self._selected_requests_exam_id = exam_id
         self._selected_requests_exam_title = str(selected_row.get("title") or "Selected exam")
+        if self._worker_is_running("_access_requests_worker"):
+            self._access_requests_refresh_pending = True
+            self._access_requests_pending_exam_id = exam_id
+            self._requests_page.set_status_message(
+                f"Refreshing access requests for {self._selected_requests_exam_title}…"
+            )
+            self._requests_page.set_busy(True)
+            return
+        self._access_requests_refresh_pending = False
+        self._access_requests_pending_exam_id = ""
         self._requests_page.set_status_message(
             f"Loading access requests for {self._selected_requests_exam_title}…"
         )
@@ -1179,7 +1207,7 @@ class ExaminerDashboard(QWidget):
             "_access_requests_worker",
         )
         self._access_requests_worker.finished.connect(
-            lambda result, gen=generation: gen == self._session_generation and self._apply_exam_access_requests(result)
+            lambda result, gen=generation, requested_exam_id=exam_id: gen == self._session_generation and self._apply_exam_access_requests(result, requested_exam_id)
         )
         self._access_requests_worker.errored.connect(
             lambda e, gen=generation: gen == self._session_generation and (
@@ -1187,18 +1215,23 @@ class ExaminerDashboard(QWidget):
                 self._requests_page.set_status_message(
                     "Network error while loading exam access requests."
                 ),
+                self._maybe_refresh_access_requests(),
             )
         )
         self._access_requests_worker.start()
 
     @Slot(object)
-    def _apply_exam_access_requests(self, result: dict):
+    def _apply_exam_access_requests(self, result: dict, requested_exam_id: str | None = None):
+        if requested_exam_id and requested_exam_id != self._selected_requests_exam_id:
+            self._maybe_refresh_access_requests()
+            return
         self._requests_page.set_busy(False)
         if result["status"] != 200:
             self._requests_page.set_requests(self._selected_requests_exam_title, [])
             self._requests_page.set_status_message(
                 f"Access request load failed: {str(result['data'])[:300]}"
             )
+            self._maybe_refresh_access_requests()
             return
         rows = result["data"] or []
         self._requests_page.set_requests(self._selected_requests_exam_title, rows)
@@ -1206,6 +1239,17 @@ class ExaminerDashboard(QWidget):
         self._requests_page.set_status_message(
             f"{len(rows)} total requests loaded for {self._selected_requests_exam_title}. {pending} pending approval."
         )
+        self._maybe_refresh_access_requests()
+
+    def _maybe_refresh_access_requests(self):
+        target_exam_id = self._access_requests_pending_exam_id or self._selected_requests_exam_id
+        if self._access_requests_refresh_pending and target_exam_id:
+            self._access_requests_refresh_pending = False
+            self._access_requests_pending_exam_id = ""
+            QTimer.singleShot(
+                0,
+                lambda exam_id=target_exam_id: self._load_exam_access_requests(exam_id),
+            )
 
     @Slot(str, str)
     def _approve_exam_access_request(self, exam_id: str, request_id: str):

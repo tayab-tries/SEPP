@@ -9,7 +9,7 @@ import os
 from typing import Optional
 
 import requests
-from PySide6.QtWidgets import QMainWindow, QStackedWidget, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QStackedWidget, QWidget
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeyEvent, QCloseEvent
 
@@ -133,6 +133,12 @@ class MainWindow(QMainWindow):
         self._nav_spinner = SpinnerOverlay(parent=self._stack)
 
         self._load_pages()
+        app = QApplication.instance()
+        if app is not None:
+            try:
+                app.aboutToQuit.connect(self._shutdown_pages)
+            except TypeError:
+                pass
         self._stack.setCurrentIndex(PAGE_STARTUP)
         logger.info("MainWindow ready")
 
@@ -359,13 +365,15 @@ class MainWindow(QMainWindow):
             os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
             exam_id,
         )
-        self._exam_launch_worker.finished.connect(self._on_exam_launch_ready)
-        self._exam_launch_worker.errored.connect(self._on_exam_launch_error)
+        self._exam_launch_worker.finished.connect(self._on_exam_launch_ready, Qt.ConnectionType.QueuedConnection)
+        self._exam_launch_worker.errored.connect(self._on_exam_launch_error, Qt.ConnectionType.QueuedConnection)
         self._exam_launch_worker.finished.connect(
-            lambda _result, w=self._exam_launch_worker: self._cleanup_exam_launch_worker(w)
+            lambda _result, w=self._exam_launch_worker: self._cleanup_exam_launch_worker(w),
+            Qt.ConnectionType.QueuedConnection
         )
         self._exam_launch_worker.errored.connect(
-            lambda _msg, w=self._exam_launch_worker: self._cleanup_exam_launch_worker(w)
+            lambda _msg, w=self._exam_launch_worker: self._cleanup_exam_launch_worker(w),
+            Qt.ConnectionType.QueuedConnection
         )
         self._exam_launch_worker.start()
 
@@ -468,15 +476,44 @@ class MainWindow(QMainWindow):
         ))
         QTimer.singleShot(80, self._nav_spinner.hide)
 
+    def _shutdown_pages(self) -> None:
+        for page in (self._student_dashboard, self._exams_page, self._examiner_dashboard):
+            if page is None:
+                continue
+            shutdown = getattr(page, "shutdown", None)
+            if not callable(shutdown):
+                continue
+            try:
+                shutdown()
+            except Exception:
+                logger.exception("Page shutdown failed")
+
     def closeEvent(self, event: QCloseEvent):
         # Ensure signup camera/background workers are stopped before teardown.
+        try:
+            shutdown = getattr(self._signup_ui, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        except Exception:
+            logger.exception("Signup UI shutdown failed")
         try:
             self._signup_ctrl.reset()
         except Exception:
             pass
         try:
-            if self._examiner_dashboard is not None:
-                self._examiner_dashboard.shutdown()
+            shutdown = getattr(self._login_ui, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        except Exception:
+            logger.exception("Login UI shutdown failed")
+        try:
+            shutdown = getattr(self._login_ctrl, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        except Exception:
+            logger.exception("Login controller shutdown failed")
+        try:
+            self._shutdown_pages()
         except Exception:
             pass
         try:

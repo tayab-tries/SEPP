@@ -315,10 +315,7 @@ class ExamsPage(QWidget):
                 self._on_exams_loaded(exams),
                 self._finish_load_job(),
             ),
-            lambda msg, replace_view=show_loading: (
-                self._upcoming_panel.set_error(msg) if replace_view else None,
-                self._finish_load_job(),
-            ),
+            lambda msg: (self._upcoming_panel.set_error(msg), self._finish_load_job()),
         )
 
         self._run_api_job(
@@ -327,10 +324,7 @@ class ExamsPage(QWidget):
                 self._pending_panel.set_requests(requests),
                 self._finish_load_job(),
             ),
-            lambda msg, replace_view=show_loading: (
-                self._pending_panel.set_error(msg) if replace_view else None,
-                self._finish_load_job(),
-            ),
+            lambda msg: (self._pending_panel.set_error(msg), self._finish_load_job()),
         )
 
     def _on_exams_loaded(self, exams: list[dict]) -> None:
@@ -343,6 +337,23 @@ class ExamsPage(QWidget):
     def refresh_data(self) -> None:
         """Re-fetch all page data. Call when the page becomes visible."""
         self._load_page_data(show_loading=False)
+
+    def shutdown(self) -> None:
+        """Stop background refresh and wait for worker threads before teardown."""
+        self._auto_refresh_timer.stop()
+        self._load_refresh_pending = False
+        for worker in list(self._workers):
+            try:
+                if worker.isRunning() and not worker.wait(2000):
+                    worker.terminate()
+                    worker.wait(2000)
+            except Exception:
+                pass
+            try:
+                worker.deleteLater()
+            except Exception:
+                pass
+        self._workers.clear()
 
     def _finish_load_job(self) -> None:
         if self._load_jobs_remaining > 0:

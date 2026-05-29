@@ -375,17 +375,22 @@ class SignupUI(QWidget):
         # Camera starts only when the user reaches Step 3 and clicks START CAMERA.
         pass
 
-    def closeEvent(self, event: QCloseEvent):
+    def shutdown(self) -> None:
         try:
             self._card.step3.reset_camera(stop_camera=True)
         except Exception:
             pass
 
+        lat_thread = getattr(self, "_lat_thread", None)
+        if lat_thread is None:
+            return
         try:
-            self._lat_thread.stop()
+            lat_thread.stop()
         except Exception:
             pass
 
+    def closeEvent(self, event: QCloseEvent):
+        self.shutdown()
         super().closeEvent(event)
 
     def resizeEvent(self, event):
