@@ -144,6 +144,8 @@ extern "C" {
     }
 
 
+static DWORD g_pump_thread_id = 0;
+
     /*
      * Message pump — REQUIRED for the hook to fire.
      * Run this on a dedicated background thread from Python:
@@ -157,11 +159,13 @@ extern "C" {
      */
     __declspec(dllexport)
     void run_message_pump() {
+        g_pump_thread_id = GetCurrentThreadId();
         MSG msg;
         while (GetMessage(&msg, NULL, 0, 0)) {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }
+        g_pump_thread_id = 0;
     }
 
 
@@ -171,7 +175,9 @@ extern "C" {
      */
     __declspec(dllexport)
     void stop_message_pump() {
-        PostQuitMessage(0);
+        if (g_pump_thread_id != 0) {
+            PostThreadMessage(g_pump_thread_id, WM_QUIT, 0, 0);
+        }
     }
 
 }  // extern "C"

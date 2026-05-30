@@ -604,7 +604,20 @@ class MainWindow(QMainWindow):
             # quitOnLastWindowClosed logic and kills the entire application.
             # deleteLater() cleanly removes it from the stack on the next event-loop tick.
             exam_page.hide()
+            try:
+                exam_page.finished.disconnect(_on_exam_finished)
+            except (RuntimeError, TypeError):
+                pass
+            
+            from PySide6.QtWidgets import QApplication
+            for widget in QApplication.topLevelWidgets():
+                logger.info(f"BEFORE: Top level widget: {widget} visible={widget.isVisible()} quitOnClose={widget.testAttribute(Qt.WidgetAttribute.WA_QuitOnClose)}")
+            
             exam_page.deleteLater()
+            
+            for widget in QApplication.topLevelWidgets():
+                logger.info(f"AFTER: Top level widget: {widget} visible={widget.isVisible()} quitOnClose={widget.testAttribute(Qt.WidgetAttribute.WA_QuitOnClose)}")
+            
             if self._active_exam_window is exam_page:
                 self._active_exam_window = None
             self.showFullScreen()
@@ -691,6 +704,7 @@ class MainWindow(QMainWindow):
         self._review_worker.start()
 
     def closeEvent(self, event: QCloseEvent):
+        logger.info("MainWindow closeEvent called", stack_info=True)
         # Ensure signup camera/background workers are stopped before teardown.
         try:
             shutdown = getattr(self._signup_ui, "shutdown", None)

@@ -152,7 +152,7 @@ class _EntryVerifyWorker(QThread):
         self.verified.emit()
 
 
-class ExamWindow(QMainWindow):
+class ExamWindow(QWidget):
     """
     Exam engine controller — logic only, no UI code.
 
@@ -283,27 +283,32 @@ class ExamWindow(QMainWindow):
 
     def _build_ui(self):
         self.setWindowTitle("ExamApp")
-        central = QWidget()
-        self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        self.central = QWidget(self)
+        main_layout.addWidget(self.central)
+
+        layout = QVBoxLayout(self.central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
         self.exam_ui = StudentExamScreenWidget(
             questions=self.questions,
             exam=self.exam,
-            parent=central,
+            parent=self.central,
         )
         layout.addWidget(self.exam_ui)
         self.question_widgets = self.exam_ui.question_widgets
 
-        self.liveness_overlay = LivenessOverlay(parent=central)
-        self.lockdown_overlay = LockdownOverlay(parent=central)
-        self.finalizing_overlay = FinalizingOverlay(parent=central)
+        self.liveness_overlay = LivenessOverlay(parent=self.central)
+        self.lockdown_overlay = LockdownOverlay(parent=self.central)
+        self.finalizing_overlay = FinalizingOverlay(parent=self.central)
         
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        rect = self.centralWidget().rect()
+        rect = self.rect()
         for widget in ("exam_ui", "liveness_overlay", "lockdown_overlay", "finalizing_overlay"):
             if hasattr(self, widget):
                 getattr(self, widget).setGeometry(rect)
@@ -589,7 +594,7 @@ class ExamWindow(QMainWindow):
     def _on_activation_failed(self, reason: str):
         dlg = InfoDialog(title="Activation Failed", body=reason, parent=self)
         dlg.exec_()
-        self._finish_exam()
+        QTimer.singleShot(300, self._finish_exam)
 
     @Slot(str)
     def _handle_liveness_failure(self, reason: str):
@@ -605,7 +610,7 @@ class ExamWindow(QMainWindow):
         ))
         dlg = InfoDialog(title="Verification Failed", body=reason, parent=self)
         dlg.exec_()
-        self._finish_exam()
+        QTimer.singleShot(300, self._finish_exam)
 
     # ── Navigation ─────────────────────────────────────────────────────────
 
@@ -932,6 +937,16 @@ class ExamWindow(QMainWindow):
             return
         self._join_background_qthreads()
         self._cleaned_up = True
+        # Disconnect internal signals to prevent queued slot delivery to deleted objects
+        for sig_name in ("_sig_liveness_status", "_sig_liveness_state", "_sig_liveness_preview",
+                          "_sig_run_complete_entry_liveness", "_sig_run_liveness_failure",
+                          "_sig_timer_update", "_sig_timer_warning", "_sig_progress", "_sig_nav_enabled"):
+            sig = getattr(self, sig_name, None)
+            if sig is not None:
+                try:
+                    sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
         self._save_timer.stop()
         self._countdown_timer.stop()
         self._fullscreen_timer.stop()

@@ -44,6 +44,7 @@ class InfoDialog(QDialog):
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog
         )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_QuitOnClose, False)
         self.setModal(True)
         self.setFixedWidth(400)
 

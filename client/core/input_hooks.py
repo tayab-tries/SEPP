@@ -212,7 +212,16 @@ class InputHooks:
         if self._dll:
             try:
                 self._dll.uninstall_hooks()
-                self._dll.stop_message_pump()
+                # Stop the background message pump thread by posting WM_QUIT (0x0012)
+                # directly to its Win32 Thread ID. We do NOT call self._dll.stop_message_pump()
+                # because the older DLL implementation incorrectly calls PostQuitMessage(0)
+                # which posts WM_QUIT to the calling (main/GUI) thread, terminating the Qt event loop.
+                if self._pump_thread and self._pump_thread.ident:
+                    import ctypes
+                    # WM_QUIT = 0x0012
+                    ctypes.windll.user32.PostThreadMessageW(self._pump_thread.ident, 0x0012, 0, 0)
+                else:
+                    self._dll.stop_message_pump()
                 self._installed = False
                 logger.info("Input hooks uninstalled")
             except Exception as e:
