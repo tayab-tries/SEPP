@@ -988,8 +988,6 @@ def get_questions(
     show_correct = is_examiner
 
     if not is_examiner:
-        from server.models.models import ExamSession
-        from shared.constants import SessionStatus
         completed = db.query(ExamSession).filter(
             ExamSession.exam_id == exam_id,
             ExamSession.student_id == current_user.id,

@@ -18,6 +18,9 @@ from client.dashboard.views.status_bar import StatusBarWidget
 from client.dashboard.services.api_worker import ApiWorker
 
 
+from client.Shared.top_bar_icon import TopBarIcon, get_initials
+
+
 # ─────────────────────────────────────────────────────────
 #  SEPP Dashboard — Design Tokens
 #  Match these to the reference screenshot.
@@ -72,7 +75,7 @@ CARD_RADIUS      = 10
 class _TopBar(QWidget):
     """Thin horizontal bar at the very top: logo + icon row + avatar."""
 
-    def __init__(self) -> None:
+    def __init__(self, full_name: str = "Student") -> None:
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(TOP_BAR_HEIGHT)
@@ -87,32 +90,37 @@ class _TopBar(QWidget):
         lay.setContentsMargins(22, 0, 22, 0)
         lay.setSpacing(16)
 
-        logo = QLabel("SEPP")
-        logo.setStyleSheet(
-            f"color:{TEXT_PRIMARY}; font-size:17px; font-weight:900; background:transparent;"
+        logo = QLabel()
+        logo.setTextFormat(Qt.TextFormat.RichText)
+        logo.setText(
+            f'<span style="color:{TEXT_PRIMARY}; font-size:17px; font-weight:900;">SEPP</span>'
+            f'<span style="color:#4a90d9; font-size:17px; font-weight:700;"> SECURE</span>'
         )
+        logo.setStyleSheet("background:transparent;")
         lay.addWidget(logo)
         lay.addStretch()
 
-        # Icon row  (camera, signal, bell — no mic per spec)
-        for icon in ["📷", "📶", "🔔"]:
-            lbl = QLabel(icon)
-            lbl.setStyleSheet("font-size:15px; background:transparent;")
-            lbl.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            lay.addWidget(lbl)
+        # Icon row (camera, signal, bell)
+        for icon_kind in ["camera", "signal", "bell"]:
+            icon_btn = TopBarIcon(icon_kind)
+            lay.addWidget(icon_btn)
 
-        # Avatar circle
-        avatar = QLabel("F")
-        avatar.setFixedSize(32, 32)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setStyleSheet("""
+        # Avatar circle showing initials
+        self.avatar = QLabel(get_initials(full_name))
+        self.avatar.setFixedSize(32, 32)
+        self.avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.avatar.setStyleSheet("""
             background: #4a90d9;
             color: white;
             border-radius: 16px;
             font-size: 13px;
             font-weight: 800;
         """)
-        lay.addWidget(avatar)
+        lay.addWidget(self.avatar)
+
+    def update_user_info(self, name: str) -> None:
+        self.avatar.setText(get_initials(name))
+
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -269,6 +277,7 @@ class InfoDialog(QDialog):
 class DashboardPage(QWidget):
     nav_requested = Signal(str)
     review_requested = Signal(str)
+    check_in_requested = Signal(str)   # exam_id → MainWindow
     sign_out_requested = Signal()
 
     def __init__(self) -> None:
@@ -295,7 +304,8 @@ class DashboardPage(QWidget):
         root_lay.setSpacing(0)
 
         # Top bar
-        root_lay.addWidget(_TopBar())
+        self._top_bar = _TopBar()
+        root_lay.addWidget(self._top_bar)
 
         # ── Body: sidebar + content ───────────────────────────────────────
         body_w = QWidget()
@@ -304,10 +314,10 @@ class DashboardPage(QWidget):
         body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(0)
 
-        sidebar = SidebarWidget()
-        sidebar.nav_clicked.connect(self._on_nav)
-        sidebar.sign_out_clicked.connect(self.sign_out_requested.emit)
-        body_lay.addWidget(sidebar)
+        self._sidebar = SidebarWidget()
+        self._sidebar.nav_clicked.connect(self._on_nav)
+        self._sidebar.sign_out_clicked.connect(self.sign_out_requested.emit)
+        body_lay.addWidget(self._sidebar)
 
         # ── Content area ─────────────────────────────────────────────────
         content_w = QWidget()
@@ -333,16 +343,7 @@ class DashboardPage(QWidget):
         left_col.setSpacing(16)
 
         self._exam_card = NextExamCard(self._api)
-        self._exam_card.check_in_clicked.connect(
-            lambda: self._dialog(
-                "Check In",
-                "Checking you into your exam…\n\n"
-                "✓ Identity verified\n"
-                "✓ Camera active\n"
-                "✓ Network stable\n\n"
-                "You may proceed to start the exam.",
-            )
-        )
+        self._exam_card.check_in_clicked.connect(self.check_in_requested.emit)
         self._exam_card.instructions_clicked.connect(
             lambda: self._dialog(
                 "Exam Instructions",
@@ -547,6 +548,8 @@ class DashboardPage(QWidget):
             student.get("system_safe", True),
             student.get("identity_verified", False),
         )
+
+        self._top_bar.update_user_info(student.get("name", "Student"))
 
         parent_layout.insertWidget(index, self._page_header)
         old_header.deleteLater()

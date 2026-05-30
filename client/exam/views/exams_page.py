@@ -18,6 +18,7 @@ from client.exam.views.pending_requests_panel  import PendingRequestsPanel
 from client.exam.views.join_exam_widget        import JoinExamWidget
 from client.dashboard.views.recent_results     import RecentResults
 from client.Shared.view_details_dialog     import ViewDetailsDialog
+from client.Shared.top_bar_icon            import TopBarIcon, get_initials
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Design tokens  (kept local — matches dashboard_page.py set)
@@ -38,7 +39,7 @@ SIDEBAR_WIDTH  = 232
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _TopBar(QWidget):
-    def __init__(self) -> None:
+    def __init__(self, full_name: str = "Student") -> None:
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(TOP_BAR_HEIGHT)
@@ -53,20 +54,22 @@ class _TopBar(QWidget):
         lay.setContentsMargins(22, 0, 22, 0)
         lay.setSpacing(16)
 
-        logo = QLabel("SEPP")
-        logo.setStyleSheet(
-            f"color:{TEXT_PRIMARY}; font-size:17px; font-weight:900; background:transparent;"
+        logo = QLabel()
+        logo.setTextFormat(Qt.TextFormat.RichText)
+        logo.setText(
+            f'<span style="color:{TEXT_PRIMARY}; font-size:17px; font-weight:900;">SEPP</span>'
+            f'<span style="color:#4a90d9; font-size:17px; font-weight:700;"> SECURE</span>'
         )
+        logo.setStyleSheet("background:transparent;")
         lay.addWidget(logo)
         lay.addStretch()
 
-        for icon in ["📷", "📶", "🔔"]:
-            lbl = QLabel(icon)
-            lbl.setStyleSheet("font-size:15px; background:transparent;")
-            lbl.setCursor(QCursor(Qt.CursorShape.PointingHandCursor))
-            lay.addWidget(lbl)
+        # Icon row (camera, signal, bell)
+        for icon_kind in ["camera", "signal", "bell"]:
+            icon_btn = TopBarIcon(icon_kind)
+            lay.addWidget(icon_btn)
 
-        avatar = QLabel("F")
+        avatar = QLabel(get_initials(full_name))
         avatar.setFixedSize(32, 32)
         avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
         avatar.setStyleSheet("""
@@ -115,11 +118,13 @@ class ExamsPage(QWidget):
     def __init__(
         self,
         api: ApiClient,
+        full_name: str = "Student",
         auto_refresh_ms: int | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._api = api
+        self._full_name = full_name
         self._workers: list[ApiWorker] = []
         self._load_jobs_remaining = 0
         self._load_refresh_pending = False
@@ -147,7 +152,7 @@ class ExamsPage(QWidget):
         root.setSpacing(0)
 
         # Top bar
-        root.addWidget(_TopBar())
+        root.addWidget(_TopBar(self._full_name))
 
         # Body: sidebar + content
         body_w = QWidget()
@@ -193,7 +198,7 @@ class ExamsPage(QWidget):
 
         self._join_widget      = JoinExamWidget()
         self._recent_results   = RecentResults(api=self._api)
-        self._recent_results.result_clicked.connect(self.review_requested.emit)
+        self._recent_results.result_clicked.connect(self._on_recent_result_clicked)
 
         right_col.addWidget(self._join_widget)
         right_col.addWidget(self._recent_results)
@@ -296,6 +301,11 @@ class ExamsPage(QWidget):
 
     def _on_join_error(self, message: str) -> None:
         self._join_widget.set_error(message or "Could not submit access request.")
+
+    def _on_recent_result_clicked(self, data: dict) -> None:
+        session_id = data.get("session_id")
+        if session_id:
+            self.review_requested.emit(session_id)
 
     # ── Data loading ──────────────────────────────────────────────────────────
 

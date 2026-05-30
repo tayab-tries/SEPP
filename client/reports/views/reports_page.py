@@ -10,6 +10,7 @@ from client.reports.views.stats_panel import StatsPanel
 from client.reports.views.all_results_list import AllResultsList
 from client.reports.services.api_client import ReportsApiClient
 from client.reports.services.api_worker import ReportsApiWorker
+from client.Shared.top_bar_icon import TopBarIcon, get_initials
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Design tokens
@@ -27,9 +28,9 @@ TOP_BAR_HEIGHT = 56
 # ─────────────────────────────────────────────────────────────────────────────
 
 class _TopBar(QWidget):
-    """Thin horizontal bar at the very top: logo + icon row."""
+    """Thin horizontal bar at the very top: logo + icon row + avatar."""
 
-    def __init__(self) -> None:
+    def __init__(self, full_name: str = "Student") -> None:
         super().__init__()
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedHeight(TOP_BAR_HEIGHT)
@@ -44,28 +45,32 @@ class _TopBar(QWidget):
         lay.setContentsMargins(22, 0, 22, 0)
         lay.setSpacing(16)
 
-        logo = QLabel("SEPP")
-        logo.setStyleSheet(
-            f"color:{TEXT_PRIMARY}; font-size:17px; font-weight:900; background:transparent;"
+        logo = QLabel()
+        logo.setTextFormat(Qt.TextFormat.RichText)
+        logo.setText(
+            f'<span style="color:{TEXT_PRIMARY}; font-size:17px; font-weight:900;">SEPP</span>'
+            f'<span style="color:#4a90d9; font-size:17px; font-weight:700;"> SECURE</span>'
         )
+        logo.setStyleSheet("background:transparent;")
         lay.addWidget(logo)
         lay.addStretch()
 
-        # Icon row  (camera, signal, bell — no mic per spec)
-        for icon in ["📷", "📶", "🔔"]:
-            lbl = QLabel(icon)
-            lbl.setStyleSheet("font-size:15px; background:transparent;")
-            lay.addWidget(lbl)
+        # Icon row (camera, signal, bell)
+        for icon_kind in ["camera", "signal", "bell"]:
+            icon_btn = TopBarIcon(icon_kind)
+            lay.addWidget(icon_btn)
 
-        # Avatar placeholder
-        avatar = QLabel()
+        # Avatar circle showing initials
+        avatar = QLabel(get_initials(full_name))
         avatar.setFixedSize(32, 32)
-        avatar.setStyleSheet(f"""
-            background: #cbd5e1;
+        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        avatar.setStyleSheet("""
+            background: #4a90d9;
+            color: white;
             border-radius: 16px;
-            border: 1px solid {BORDER_COLOR};
+            font-size: 13px;
+            font-weight: 800;
         """)
-        lay.addSpacing(8)
         lay.addWidget(avatar)
 
 
@@ -85,10 +90,12 @@ class ReportsPage(QWidget):
     def __init__(
         self,
         api: ReportsApiClient,
+        full_name: str = "Student",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._api = api
+        self._full_name = full_name
         
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setStyleSheet(f"background: {MAIN_BG};")
@@ -109,7 +116,7 @@ class ReportsPage(QWidget):
         root.setSpacing(0)
 
         # Top bar
-        root.addWidget(_TopBar())
+        root.addWidget(_TopBar(self._full_name))
 
         # Body (Sidebar + Content)
         body_w = QWidget()

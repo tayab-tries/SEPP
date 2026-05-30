@@ -62,7 +62,7 @@ class NextExamCard(QWidget):
     Contains a live countdown timer that ticks every second.
     """
 
-    check_in_clicked    = Signal()
+    check_in_clicked    = Signal(str)   # emits exam_id
     instructions_clicked = Signal()
 
     def __init__(self, api: ApiClient) -> None:
@@ -70,6 +70,7 @@ class NextExamCard(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._api       = api
         self._target_dt: datetime | None = None
+        self._current_exam_id: str | None = None
 
         self.setStyleSheet(f"""
             NextExamCard {{
@@ -138,7 +139,7 @@ class NextExamCard(QWidget):
             QPushButton:hover  {{ background: {ACCENT_YELLOW_H}; }}
             QPushButton:pressed {{ background: #c07800; }}
         """)
-        self._checkin_btn.clicked.connect(self.check_in_clicked)
+        self._checkin_btn.clicked.connect(self._on_checkin_clicked)
 
         self._instr_btn = QPushButton("View Instructions")
         self._instr_btn.setFixedHeight(46)
@@ -236,6 +237,7 @@ class NextExamCard(QWidget):
         self._title_lbl.setText("Loading…")
         self._desc_lbl.setText("Fetching your next scheduled exam.")
         self._target_dt = None
+        self._current_exam_id = None
         self._checkin_btn.setEnabled(False)
         self._instr_btn.setEnabled(False)
         self._tick()
@@ -246,7 +248,8 @@ class NextExamCard(QWidget):
             self.set_empty()
             return
 
-        self._checkin_btn.setEnabled(True)
+        self._current_exam_id = data.get("exam_id")
+        self._checkin_btn.setEnabled(bool(self._current_exam_id))
         self._instr_btn.setEnabled(True)
 
         self._title_lbl.setText(data.get("title", "Untitled Exam"))
@@ -280,6 +283,7 @@ class NextExamCard(QWidget):
         self._title_lbl.setText("No upcoming exam")
         self._desc_lbl.setText("You currently have no scheduled exams.")
         self._target_dt = None
+        self._current_exam_id = None
         self._checkin_btn.setEnabled(False)
         self._instr_btn.setEnabled(False)
         self._tick()
@@ -289,6 +293,7 @@ class NextExamCard(QWidget):
         self._title_lbl.setText("Unable to load exam")
         self._desc_lbl.setText(message)
         self._target_dt = None
+        self._current_exam_id = None
         self._checkin_btn.setEnabled(False)
         self._instr_btn.setEnabled(False)
         self._tick()
@@ -318,6 +323,10 @@ class NextExamCard(QWidget):
         h, rem = divmod(total, 3600)
         m, s   = divmod(rem, 60)
         self._countdown_lbl.setText(f"{h:02d}:{m:02d}:{s:02d}")
+
+    def _on_checkin_clicked(self) -> None:
+        if self._current_exam_id:
+            self.check_in_clicked.emit(self._current_exam_id)
 
     def hideEvent(self, event):
         super().hideEvent(event)

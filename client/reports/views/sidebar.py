@@ -145,30 +145,32 @@ class SidebarWidget(QWidget):
         logo_w.setFixedHeight(76)
         logo_w.setStyleSheet("background: transparent;")
         logo_lay = QHBoxLayout(logo_w)
-        logo_lay.setContentsMargins(8, 0, 8, 0)
+        logo_lay.setContentsMargins(12, 0, 8, 0)
         logo_lay.setSpacing(10)
+        logo_lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         shield = QLabel("🛡")
-        shield.setFixedSize(38, 38)
+        shield.setFixedSize(36, 36)
         shield.setAlignment(Qt.AlignmentFlag.AlignCenter)
         shield.setStyleSheet(
-            "background: #1e4d8c; border-radius: 9px; font-size: 18px; color: white;"
+            "background: #1e4d8c; border-radius: 8px; font-size: 17px; color: white;"
         )
 
         name_col = QVBoxLayout()
-        name_col.setSpacing(0)
+        name_col.setSpacing(1)
+        name_col.setContentsMargins(0, 0, 0, 0)
         name_lbl = QLabel("SEPP Secure")
         name_lbl.setStyleSheet(
-            "color:white; font-size:13px; font-weight:700; background:transparent; margin-bottom:0px;"
+            "color:#4a90d9; font-size:14px; font-weight:800; background:transparent;"
         )
         ver_lbl = QLabel("v2.4.0 Active")
         ver_lbl.setStyleSheet(
-            f"color:{SIDEBAR_TEXT}; font-size:11px; background:transparent; margin-bottom:0px;"
+            f"color:{SIDEBAR_TEXT}; font-size:10px; font-weight:500; background:transparent;"
         )
         name_col.addWidget(name_lbl)
         name_col.addWidget(ver_lbl)
 
-        logo_lay.addWidget(shield)
+        logo_lay.addWidget(shield, 0, Qt.AlignmentFlag.AlignVCenter)
         logo_lay.addLayout(name_col)
         logo_lay.addStretch()
         root.addWidget(logo_w)
@@ -243,5 +245,11 @@ class SidebarWidget(QWidget):
         return btn
 
     def _on_item_clicked(self, label: str) -> None:
+        for item in self._nav_items:
+            item.set_active(item._label == label)
         self.nav_clicked.emit(label)
+
+    def set_active_label(self, label: str) -> None:
+        for item in self._nav_items:
+            item.set_active(item._label == label)
 

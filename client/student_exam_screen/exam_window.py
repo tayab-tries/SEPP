@@ -786,9 +786,10 @@ class ExamWindow(QMainWindow):
     def _on_finalize_success(self, reason: str, result: dict) -> None:
         self._finalizing = False
 
+        submitted_reasons = {"manual_submit", "time_up", "examiner_end"}
         event_type = (
             EventType.EXAM_SUBMITTED
-            if finalize_reason in submitted_reasons
+            if reason in submitted_reasons
             else EventType.SESSION_TERMINATED
         )
         self.event_logger.log(ProctoringEvent(

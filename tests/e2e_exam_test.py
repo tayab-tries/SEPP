@@ -1,5 +1,9 @@
 import os
 import sys
+
+# Force all client API config imports to use port 8005 during E2E test run
+os.environ["API_BASE_URL"] = "http://localhost:8005"
+
 import time
 import requests
 import json
@@ -14,12 +18,15 @@ from PySide6.QtWidgets import QApplication
 # Add project root to sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8005"
 
 @pytest.fixture(scope="module")
 def setup_test_data():
     # Call the setup script using the server's venv python to populate DB
-    server_python = os.path.join(os.path.dirname(__file__), "..", "server", ".venv", "Scripts", "python.exe")
+    if sys.platform == "win32":
+        server_python = os.path.join(os.path.dirname(__file__), "..", "server", ".venv", "Scripts", "python.exe")
+    else:
+        server_python = os.path.join(os.path.dirname(__file__), "..", "server", "venv", "bin", "python")
     setup_script = os.path.join(os.path.dirname(__file__), "e2e_setup.py")
     subprocess.run([server_python, setup_script], check=True)
     yield ("test_examiner@mail.com", "test_student@mail.com")
@@ -165,7 +172,7 @@ def test_e2e_exam_flow(qtbot, setup_test_data, monkeypatch):
 
     wait_until(lambda: check_exam_window() is not None, timeout_ms=5000)
     exam_window = check_exam_window()
-    qtbot.addWidget(exam_window)
+    # qtbot.addWidget(exam_window)  # Managed by MainWindow lifecycle
 
     # Wait for exam to become active
     def wait_exam_active():
@@ -317,6 +324,16 @@ def test_e2e_liveness_failure(qtbot, setup_test_data, monkeypatch):
     }, headers={"Authorization": f"Bearer {examiner_token}"})
     exam_id = resp.json()["exam_id"]
     
+    # Add a dummy question so the exam can transition to live status
+    resp = requests.post(f"{BASE_URL}/exams/{exam_id}/questions", json={
+        "question_type": "mcq",
+        "text": "What is 2+2?",
+        "options": ["3", "4", "5"],
+        "correct_option": "4",
+        "marks": 5
+    }, headers={"Authorization": f"Bearer {examiner_token}"})
+    assert resp.status_code == 201
+
     resp = requests.patch(f"{BASE_URL}/exams/{exam_id}/status", json={"status": "live"}, headers={"Authorization": f"Bearer {examiner_token}"})
     
     # Student joins class
@@ -327,17 +344,19 @@ def test_e2e_liveness_failure(qtbot, setup_test_data, monkeypatch):
     requests.put(f"{BASE_URL}/classes/{class_id}/enrollments/{enrollment_id}/approve", headers={"Authorization": f"Bearer {examiner_token}"})
 
     # Wait for StartupUI to finish
+    wait_until(lambda: window.centralWidget().currentWidget().__class__.__name__ == "StartupUI", timeout_ms=5000)
+    startup_ui = window.centralWidget().currentWidget()
+    qtbot.mouseClick(startup_ui._login_btn, Qt.LeftButton)
+
+    # Wait for LoginUI
     wait_until(lambda: window.centralWidget().currentWidget().__class__.__name__ == "LoginUI", timeout_ms=5000)
-    
-    from PySide6.QtWidgets import QLineEdit
     login_ui = window.centralWidget().currentWidget()
-    email_input = login_ui.findChild(QLineEdit, "emailInput")
-    pass_input = login_ui.findChild(QLineEdit, "passwordInput")
-    login_btn = login_ui.findChild(QPushButton, "loginButton")
     
-    email_input.setText(student_email)
-    pass_input.setText("password")
-    qtbot.mouseClick(login_btn, Qt.LeftButton)
+    # Fill login form
+    login_ui.username.setText(student_email)
+    login_ui.pw_field.setText("password")
+    login_ui.policy_checkbox.setChecked(True)
+    qtbot.mouseClick(login_ui.login_btn, Qt.LeftButton)
     
     def check_dashboard():
         current = window.centralWidget().currentWidget()
@@ -355,7 +374,7 @@ def test_e2e_liveness_failure(qtbot, setup_test_data, monkeypatch):
 
     wait_until(lambda: check_exam_window() is not None, timeout_ms=5000)
     exam_window = check_exam_window()
-    qtbot.addWidget(exam_window)
+    # qtbot.addWidget(exam_window)  # Managed by MainWindow lifecycle
 
     # The mocked start_entry will immediately trigger a failure.
     # The app should show an InfoDialog with the failure reason.
@@ -363,6 +382,10 @@ def test_e2e_liveness_failure(qtbot, setup_test_data, monkeypatch):
         for widget in QApplication.topLevelWidgets():
             if widget.__class__.__name__ == "InfoDialog":
                 return widget
+        from PySide6.QtWidgets import QWidget
+        for child in window.findChildren(QWidget):
+            if child.__class__.__name__ == "InfoDialog":
+                return child
         return None
 
     wait_until(lambda: check_info_dialog() is not None, timeout_ms=5000)

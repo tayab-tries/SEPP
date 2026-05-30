@@ -108,6 +108,12 @@ class MainWindow(QMainWindow):
             Qt.WindowType.FramelessWindowHint |
             Qt.WindowType.WindowStaysOnTopHint,
         )
+
+        # On Linux, FramelessWindowHint can prevent the WM from honouring
+        # showFullScreen().  Explicitly size to full screen geometry first.
+        screen = QApplication.primaryScreen()
+        if screen is not None:
+            self.setGeometry(screen.geometry())
         self.showFullScreen()
 
         self._is_transitioning = False
@@ -199,6 +205,7 @@ class MainWindow(QMainWindow):
         self._student_dashboard.nav_requested.connect(self._on_dashboard_nav_requested)
         self._student_dashboard.sign_out_requested.connect(self._on_sign_out_requested)
         self._student_dashboard.review_requested.connect(self._on_review_requested)
+        self._student_dashboard.check_in_requested.connect(self._on_exam_check_in_requested)
 
         # Replace the placeholder at index 3 without disturbing other indices.
         self._stack.insertWidget(PAGE_STUDENT_DASHBOARD, self._student_dashboard)
@@ -233,7 +240,7 @@ class MainWindow(QMainWindow):
             base_url=os.getenv("API_BASE_URL", "http://127.0.0.1:8000"),
             access_token=self._auth_token,
         )
-        self._exams_page = ExamsPage(api=api)
+        self._exams_page = ExamsPage(api=api, full_name=self._active_full_name or "Student")
         self._exams_page.nav_requested.connect(self._on_dashboard_nav_requested)
         self._exams_page.check_in_navigated.connect(self._on_exam_check_in_requested)
         self._exams_page.review_requested.connect(self._on_review_requested)
@@ -259,7 +266,7 @@ class MainWindow(QMainWindow):
             access_token=self._auth_token,
         )
         
-        self._reports_page = ReportsPage(api=api)
+        self._reports_page = ReportsPage(api=api, full_name=self._active_full_name or "Student")
         self._reports_page.nav_requested.connect(self._on_dashboard_nav_requested)
         self._reports_page.sign_out_requested.connect(self._on_sign_out_requested)
         self._reports_page.review_requested.connect(self._on_review_requested)
@@ -744,6 +751,7 @@ class MainWindow(QMainWindow):
 
         if key in {"dashboard", "home"}:
             self._navigate_to(PAGE_STUDENT_DASHBOARD)
+            self._reset_sidebar_highlights("Dashboard")
             return
 
         if key in {"exams", "my exams", "assessments"}:
@@ -757,6 +765,7 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 logger.warning("Could not refresh Exams page: %s", exc)
             self._navigate_to(PAGE_EXAMS)
+            self._reset_sidebar_highlights("Exams")
             return
 
         if key in {"reports", "my reports"}:
@@ -770,8 +779,18 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 logger.warning("Could not refresh Reports page: %s", exc)
             self._navigate_to(PAGE_REPORTS)
+            self._reset_sidebar_highlights("Reports")
             return
 
         # Page does not exist yet, so keep showing the same dashboard-style dialog.
         if self._student_dashboard is not None:
             self._student_dashboard.show_nav_dialog(label)
+
+    def _reset_sidebar_highlights(self, active_label: str) -> None:
+        """Reset every page's sidebar so only the target page is highlighted."""
+        for page in (self._student_dashboard, self._exams_page, self._reports_page):
+            if page is None:
+                continue
+            sidebar = getattr(page, "_sidebar", None)
+            if sidebar is not None and hasattr(sidebar, "set_active_label"):
+                sidebar.set_active_label(active_label)
