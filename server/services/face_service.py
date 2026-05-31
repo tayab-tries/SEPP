@@ -30,10 +30,13 @@ _device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 _mtcnn = MTCNN(
     image_size=160,
     margin=20,
-    keep_all=False,       # Only return the most prominent face
+    keep_all=True,       # Return all faces to detect multiples
     post_process=True,    # Normalize pixel values
     device=_device,
 )
+
+class MultipleFacesError(Exception):
+    pass
 
 _resnet = InceptionResnetV1(pretrained="vggface2").eval().to(_device)
 
@@ -56,20 +59,30 @@ def extract_embedding(image_path: str) -> Optional[list[float]]:
     try:
         img = Image.open(image_path).convert("RGB")
 
-        # MTCNN detects + crops + aligns the face → (3, 160, 160) tensor
+        # MTCNN detects + crops + aligns the face → (N, 3, 160, 160) tensor with keep_all=True
         face_tensor = _mtcnn(img)
 
         if face_tensor is None:
             return None  # No face found
 
-        # Add batch dimension: (1, 3, 160, 160)
-        face_tensor = face_tensor.unsqueeze(0).to(_device)
+        # With keep_all=True, face_tensor has shape (N, 3, 160, 160)
+        if face_tensor.dim() == 4 and face_tensor.shape[0] > 1:
+            raise MultipleFacesError("Multiple faces detected in the image.")
+
+        if face_tensor.dim() == 4:
+            # Extract the single face and ensure it has batch dimension
+            face_tensor = face_tensor[0].unsqueeze(0).to(_device)
+        else:
+            # Fallback just in case
+            face_tensor = face_tensor.unsqueeze(0).to(_device)
 
         with torch.no_grad():
             embedding = _resnet(face_tensor)  # → (1, 512)
 
         return embedding.squeeze().cpu().tolist()  # 512 Python floats
 
+    except MultipleFacesError:
+        raise
     except Exception:
         return None
 
@@ -105,7 +118,15 @@ def verify_embedding(
         }
         On detection failure, adds "error" key and verified=False.
     """
-    live_embedding = extract_embedding(image_path)
+    try:
+        live_embedding = extract_embedding(image_path)
+    except MultipleFacesError:
+        return {
+            "verified": False,
+            "similarity": 0.0,
+            "distance": 1.0,
+            "error": "Multiple faces detected. Please ensure only you are in the camera frame.",
+        }
 
     if live_embedding is None:
         return {

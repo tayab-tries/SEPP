@@ -1172,7 +1172,8 @@ class _Step3ReviewForm(QWidget):
         if self._camera:
             if stop_camera:
                 self._camera.stop(clear_preview=True)
-            self._camera.reset_capture()
+            else:
+                self._camera.reset_capture()
         self._agreement.setChecked(False)
         self._update_complete_state()
 
