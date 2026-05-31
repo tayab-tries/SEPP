@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+# pyrefly: ignore [missing-import]
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QFrame,
     QSizePolicy,
@@ -130,8 +131,16 @@ class SidebarWidget(QWidget):
     nav_clicked = Signal(str)
     sign_out_clicked = Signal()
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        title: str = "SEPP Secure",
+        subtitle: str = "v2.4.0 Active",
+        nav_items: list[tuple[str, str]] | None = None
+    ) -> None:
         super().__init__()
+        
+        if nav_items is None:
+            nav_items = _NAV_ITEMS
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.setFixedWidth(SIDEBAR_WIDTH)
         self.setStyleSheet(f"background: {SIDEBAR_BG};")
@@ -159,11 +168,11 @@ class SidebarWidget(QWidget):
         name_col = QVBoxLayout()
         name_col.setSpacing(1)
         name_col.setContentsMargins(0, 0, 0, 0)
-        name_lbl = QLabel("SEPP Secure")
+        name_lbl = QLabel(title)
         name_lbl.setStyleSheet(
             "color:#4a90d9; font-size:14px; font-weight:800; background:transparent;"
         )
-        ver_lbl = QLabel("v2.4.0 Active")
+        ver_lbl = QLabel(subtitle)
         ver_lbl.setStyleSheet(
             f"color:{SIDEBAR_TEXT}; font-size:10px; font-weight:500; background:transparent;"
         )
@@ -184,7 +193,7 @@ class SidebarWidget(QWidget):
 
         # ── Nav items ────────────────────────────────────────────────────
         self._nav_items: list[_NavItem] = []
-        for icon, label in _NAV_ITEMS:
+        for icon, label in nav_items:
             item = _NavItem(icon, label, active=(label == "Dashboard"))
             item.clicked.connect(self._on_item_clicked)
             self._nav_items.append(item)

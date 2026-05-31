@@ -1,0 +1,219 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>ExamApp Final Report</title>
+    <style>
+        body { font-family: Calibri, sans-serif; line-height: 1.6; }
+        table { border-collapse: collapse; width: 100%; margin-bottom: 1em; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        img { max-width: 100%; height: auto; }
+    </style>
+</head>
+<body>
+    <h1>Section 1: Introduction</h1>
+<h2>1.1 Background</h2>
+<p>The shift toward digital assessment has transformed higher education, offering flexibility but introducing vulnerabilities like academic dishonesty. Existing solutions, mostly browser-based, lack operating system-level access to reliably enforce security, creating an operational gap. ExamApp bridges this gap by providing a secure, desktop-native examination platform with AI-assisted proctoring and real-time monitoring.</p>
+<h2>1.2 Problem Statement</h2>
+<p>Existing online examination platforms suffer from critical shortcomings:
+1. <strong>Insufficient Security Enforcement:</strong> Browser-based tools cannot reliably detect system-level violations.
+2. <strong>Lack of Real-Time Identity Verification:</strong> Continuous verification during exams is rarely implemented.
+3. <strong>Poor Examiner Visibility:</strong> Examiners lack real-time insights into student behavior during live exams.
+4. <strong>Fragile Session Management:</strong> Network disruptions often cause data loss.
+5. <strong>Limited Assessment Flexibility:</strong> Mixed-format (MCQ + Essay) assessments are poorly supported.</p>
+<h2>1.3 Aim &amp; Objectives</h2>
+<p><strong>Aim:</strong> To develop ExamApp, a secure desktop examination platform for conducting proctored assessments with real-time monitoring, AI-assisted identity verification, and robust session management.
+<strong>Objectives:</strong>
+- Develop a role-based authentication system with facial biometric enrollment.
+- Implement comprehensive exam lifecycle management (Draft → Scheduled → Live → Closed).
+- Build a desktop-native environment that enforces OS-level integrity controls via a custom C++ hook DLL.
+- Integrate AI-assisted proctoring (MediaPipe, FaceNet) for continuous identity and liveness verification.
+- Design a real-time communication layer using WebSockets for live monitoring.
+- Develop a resilient session management system with encrypted local caching.
+- Create reporting modules for detailed grading and integrity analytics.</p>
+<h2>1.4 Scope &amp; Limitations</h2>
+<p><strong>Scope:</strong> Covers User Management, Exam Lifecycle Management, a Secure Exam Environment, Real-Time Communication, Session Reconnection, Grading, and Reporting.
+<strong>Limitations:</strong> Windows only; no web/mobile client; AI runs locally rather than via a microservice; development database is SQLite; plain HTTP/WS (no TLS currently).</p>
+<h2>1.5 Motivation</h2>
+<p>Existing proctoring solutions impose high costs and privacy concerns by sharing biometric data with third parties, while open-source alternatives lack system-level security. ExamApp was built to provide a secure, self-hosted, and cost-effective alternative while offering an extensive learning opportunity in full-stack desktop development, real-time networking, and computer vision.</p>
+<hr />
+<h1>Section 2: Methodology (Software Process Model)</h1>
+<h2>2.1 Development Life Cycle Selected</h2>
+<p>The <strong>Iterative and Incremental Development Model</strong> was chosen. This allowed for continuous integration and testing of core modules (e.g., integrating the Python UI with the native C++ hooks and WebSocket backend), mitigating technical risks early and adapting to evolving requirements.</p>
+<h3>Iterative Development Lifecycle Diagram</h3>
+<p><img alt="Diagram 1" src="diagrams/diagram_1.png" /></p>
+<h2>2.2 Requirement Engineering</h2>
+<h3>2.2.1 Functional Requirements (Core)</h3>
+<ul>
+<li><strong>FR-01:</strong> System shall support Role-based Authentication (Student/Examiner) with facial enrollment.</li>
+<li><strong>FR-02:</strong> Examiners can create Classes and manage Exam Lifecycles.</li>
+<li><strong>FR-03:</strong> Students can join exams and undergo liveness/identity verification before entry.</li>
+<li><strong>FR-04:</strong> The client must sync answers in real-time via WebSockets and cache them locally.</li>
+<li><strong>FR-05:</strong> Examiners must be able to view live proctoring events and terminate sessions remotely.</li>
+</ul>
+<h3>2.2.2 Non-Functional Requirements (Core)</h3>
+<ul>
+<li><strong>Performance:</strong> Adaptive camera frame rates (10 FPS active, 2 FPS idle) to reduce CPU usage.</li>
+<li><strong>Security:</strong> Use of bcrypt for passwords, JWTs for sessions, and a custom native DLL to intercept keyboard/mouse events.</li>
+<li><strong>Reliability:</strong> Support seamless reconnection to active sessions without data loss after network drops.</li>
+</ul>
+<h2>2.3 System Feasibility Analysis</h2>
+<ul>
+<li><strong>Technical Feasibility:</strong> Python (FastAPI, PySide6) combined with SQLite/PostgreSQL, MediaPipe, and a C++ DLL handles all requirements natively.</li>
+<li><strong>Operational Feasibility:</strong> Deploys internally on institutional infrastructure; desktop clients install on student machines.</li>
+<li><strong>Economic Feasibility:</strong> Built entirely on open-source frameworks (LGPL/MIT), eliminating recurring licensing costs.</li>
+</ul>
+<h2>2.4 Tools &amp; Environment Setup</h2>
+<ul>
+<li><strong>Backend:</strong> Python 3.10+, FastAPI, Uvicorn, SQLAlchemy, SQLite/PostgreSQL, <code>websockets</code>, <code>python-jose</code>, <code>passlib</code>.</li>
+<li><strong>Frontend &amp; Native:</strong> PySide6 (Qt6), <code>requests</code>, <code>cryptography</code>, <code>psutil</code>, C++ custom <code>input_hooks.dll</code>.</li>
+<li><strong>AI/Vision:</strong> <code>facenet-pytorch</code>, <code>opencv-python</code>, <code>mediapipe</code>.</li>
+</ul>
+<hr />
+<h1>Section 3: System Analysis &amp; Design</h1>
+<h2>3.1 Use Case Diagram &amp; Descriptions</h2>
+<h3>Use Case Diagram</h3>
+<p><img alt="Diagram 2" src="diagrams/diagram_2.png" /></p>
+<h3>Key Workflows</h3>
+<ul>
+<li><strong>UC-01 (Register &amp; Face Enroll):</strong> Users provide details and capture a webcam photo. The system extracts a 512-dim embedding for future identity checks.</li>
+<li><strong>UC-09 (Manage Exam Lifecycle):</strong> Examiners create and transition exams through Draft → Scheduled → Live → Closed states.</li>
+<li><strong>UC-16 (Start Exam Session):</strong> Students verify their identity via a live webcam feed against their stored embedding before entering the exam.</li>
+<li><strong>UC-20 (Monitor Activity):</strong> Background processes monitor face presence, gaze, window switches, and system events, streaming violations to examiners in real time.</li>
+</ul>
+<h2>3.2 Activity Diagrams</h2>
+<h3>Student Registration &amp; Face Enrollment</h3>
+<p><img alt="Diagram 3" src="diagrams/diagram_3.png" /></p>
+<h3>Student Exam Attempt (Complete Flow)</h3>
+<p><img alt="Diagram 4" src="diagrams/diagram_4.png" /></p>
+<h3>Examiner Exam Creation &amp; Lifecycle</h3>
+<p><img alt="Diagram 5" src="diagrams/diagram_5.png" /></p>
+<h3>Real-Time Proctoring &amp; Violation Detection</h3>
+<p><img alt="Diagram 6" src="diagrams/diagram_6.png" /></p>
+<h3>Examiner Review &amp; Grading</h3>
+<p><img alt="Diagram 7" src="diagrams/diagram_7.png" /></p>
+<h2>3.3 Sequence Diagrams</h2>
+<h3>Student Login Flow</h3>
+<p><img alt="Diagram 8" src="diagrams/diagram_8.png" /></p>
+<h3>Exam Session Lifecycle</h3>
+<p><img alt="Diagram 9" src="diagrams/diagram_9.png" /></p>
+<h3>Real-Time Proctoring Event Flow</h3>
+<p><img alt="Diagram 10" src="diagrams/diagram_10.png" /></p>
+<h3>Examiner Terminates Student Session</h3>
+<p><img alt="Diagram 11" src="diagrams/diagram_11.png" /></p>
+<h2>3.4 Class Diagram (UML)</h2>
+<p><img alt="Diagram 12" src="diagrams/diagram_12.png" /></p>
+<h2>3.5 Database Design</h2>
+<h3>ER Diagram</h3>
+<p><img alt="Diagram 13" src="diagrams/diagram_13.png" /></p>
+<h3>Core Schema Overview</h3>
+<p>The database relies on several core tables:
+- <strong><code>users</code></strong>: Stores authentication details, roles, and biometric embeddings.
+- <strong><code>classes</code> &amp; <code>exams</code></strong>: Represents hierarchical grouping of exams and their lifecycle configurations.
+- <strong><code>questions</code> &amp; <code>answers</code></strong>: Stores assessment content and student responses.
+- <strong><code>exam_sessions</code></strong>: Tracks student progression through an exam, including grades and integrity scores.
+- <strong><code>proctoring_events</code></strong>: Logs integrity violations linked to specific sessions.</p>
+<h2>3.6 UI/UX Mockups / Wireframes</h2>
+<p><img alt="Diagram 14" src="diagrams/diagram_14.png" /></p>
+<p><em>(Screenshots to be placed inline in Section 4.2)</em></p>
+<h2>3.7 System Architecture Diagram</h2>
+<p><img alt="Diagram 15" src="diagrams/diagram_15.png" /></p>
+<h2>3.8 Data Flow Diagrams (DFDs)</h2>
+<h3>Level-0 DFD (Context Diagram)</h3>
+<p><img alt="Diagram 16" src="diagrams/diagram_16.png" /></p>
+<h3>Level-1 DFD</h3>
+<p><img alt="Diagram 17" src="diagrams/diagram_17.png" /></p>
+<hr />
+<h1>Section 4: Implementation</h1>
+<h2>4.1 Development Environment</h2>
+<p>The application is structured into a desktop client (PySide6) and a backend server (FastAPI). 
+- <strong>Server:</strong> Runs in an isolated virtual environment, exposing REST endpoints and WebSocket channels for real-time data sync.
+- <strong>Client:</strong> A Windows-native executable that uses a two-process architecture to isolate AI facial processing from the main UI thread, ensuring smooth performance. It leverages a compiled C++ DLL to enforce strict keyboard/mouse hooks during active exams.</p>
+<h2>4.2 User Interface Screenshots</h2>
+<p><em>(Note: Visuals to be inserted during document assembly)</em></p>
+<ol>
+<li><strong>Authentication &amp; Dashboard:</strong> The dark-themed UI provides distinct dashboards for Students (showing upcoming exams) and Examiners (showing active exams and metrics).</li>
+<li><strong>Exam Entry Verification:</strong> A critical overlay enforcing biometric checks before entering an exam.</li>
+<li><strong>Active Exam View:</strong> A distraction-free interface featuring a timer, navigation sidebar, and answer inputs. It syncs answers continuously via WebSockets.</li>
+<li><strong>Live Proctoring Monitor:</strong> The Examiner's view of all active student sessions, displaying live integrity scores and incoming violation events.</li>
+<li><strong>Review &amp; Grading:</strong> Interface for examiners to score essay questions alongside an event timeline to assess a student's integrity.</li>
+</ol>
+<hr />
+<h1>Section 5: Testing &amp; Quality Assurance</h1>
+<h2>5.1 Test Strategy</h2>
+<p>Testing prioritized End-to-End (E2E) flows validating the integration of the PySide6 UI, the FastAPI backend, and WebSocket streams using <code>pytest</code> and <code>pytest-qt</code>. Fault injection tests verified offline caching resilience.</p>
+<h2>5.2 Key Test Cases</h2>
+<table>
+<thead>
+<tr>
+<th>Test ID</th>
+<th>Description</th>
+<th>Expected Output</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>TC-01</strong></td>
+<td><strong>Create &amp; Publish Exam:</strong> Examiner creates exam, adds questions, and makes it Live.</td>
+<td>Exam state transitions to <code>LIVE</code> successfully.</td>
+<td>Pass</td>
+</tr>
+<tr>
+<td><strong>TC-02</strong></td>
+<td><strong>Student Check-In:</strong> Student verifies identity via liveness check to enter exam.</td>
+<td>Session becomes <code>ACTIVE</code> and timer starts.</td>
+<td>Pass</td>
+</tr>
+<tr>
+<td><strong>TC-03</strong></td>
+<td><strong>Liveness Failure:</strong> Simulation of failed face detection during entry.</td>
+<td>UI blocks entry, session terminates without crashing.</td>
+<td>Pass</td>
+</tr>
+<tr>
+<td><strong>TC-04</strong></td>
+<td><strong>Offline Resilience:</strong> Disconnect network during exam, reconnect after 30s.</td>
+<td>Local cache saves answers; syncs perfectly on reconnect.</td>
+<td>Pass</td>
+</tr>
+<tr>
+<td><strong>TC-05</strong></td>
+<td><strong>Proctoring Flag:</strong> Student switches windows; event is logged.</td>
+<td>Examiner dashboard receives high-severity WebSocket alert.</td>
+<td>Pass</td>
+</tr>
+<tr>
+<td><strong>TC-06</strong></td>
+<td><strong>Remote Termination:</strong> Examiner unilaterally ends student session.</td>
+<td>Student UI immediately locks and closes the session.</td>
+<td>Pass</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h1>Section 6: Conclusion &amp; Future Work</h1>
+<h2>6.1 Summary of Achievements</h2>
+<p>ExamApp successfully delivered a secure, desktop-native assessment tool. It implements robust dual-workflow authentication, real-time proctoring via computer vision and system-level hooks, and a fault-tolerant session manager capable of handling network drops without data loss.</p>
+<h2>6.2 Challenges Faced</h2>
+<ul>
+<li><strong>Concurrency in UI:</strong> Balancing asynchronous WebSocket tasks with the synchronous Qt event loop required precise thread management.</li>
+<li><strong>Process Isolation:</strong> Offloading MediaPipe processing to background threads prevented the UI from freezing but complicated cross-process memory management.</li>
+<li><strong>Native OS Hooks:</strong> Capturing Windows-level events safely without triggering antivirus software required extensive tuning.</li>
+</ul>
+<h2>6.3 Lessons Learned</h2>
+<ul>
+<li><strong>Security vs. Usability:</strong> Strict anti-cheat measures must be balanced with graceful offline failure states to prevent punishing students for genuine network instability.</li>
+<li><strong>Single Source of Truth:</strong> Relying on the server's WebSocket manager as the authoritative state handler was essential to prevent client/server desynchronization.</li>
+</ul>
+<h2>6.4 Future Enhancements</h2>
+<ol>
+<li><strong>AI Microservice:</strong> Shift local facial processing to a centralized GPU-accelerated server to lower client hardware requirements.</li>
+<li><strong>Advanced Hardware Checks:</strong> Add VM detection (CPUID) and system-wide clipboard locks.</li>
+<li><strong>Security Hardening:</strong> Implement end-to-end TLS/WSS encryption and SQLCipher for local data at rest.</li>
+<li><strong>Cross-Platform Support:</strong> Port the application to macOS and Linux using Qt6’s cross-platform capabilities.</li>
+</ol>
+</body>
+</html>

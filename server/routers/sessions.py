@@ -764,13 +764,19 @@ def get_exam_sessions(
         refresh_integrity_score(session.id, db)
     db.commit()
 
+    has_essays = any(q.question_type.value == "essay" for q in exam.questions)
+
     rows = []
     for s in sessions:
         event_counts = proctoring_event_counts(s.id, db)
+        student_name = s.student.full_name if s.student else "Unknown Student"
+        is_graded = s.essay_score is not None if has_essays else True
         rows.append({
             "session_id": s.id,
             "student_id": s.student_id,
+            "student_name": student_name,
             "status": s.status,
+            "is_graded": is_graded,
             "started_at": s.started_at,
             "submitted_at": s.submitted_at,
             "terminated_at": s.terminated_at,

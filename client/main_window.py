@@ -218,7 +218,7 @@ class MainWindow(QMainWindow):
         self._student_placeholder = None
 
     def _build_examiner_dashboard(self):
-        from client.modules.dashboard.examiner_dashboard import ExaminerDashboard
+        from client.modules.examiner_dashboard.examiner_dashboard_orchestrator import ExaminerDashboard
         self._examiner_dashboard = ExaminerDashboard()
         self._examiner_dashboard.sign_out_requested.connect(self._on_sign_out_requested)
         self._stack.insertWidget(PAGE_EXAMINER_DASHBOARD, self._examiner_dashboard)

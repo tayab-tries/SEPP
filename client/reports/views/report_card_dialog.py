@@ -2,7 +2,7 @@ from datetime import datetime
 from PySide6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QFrame
 from PySide6.QtCore import Qt
 
-from client.shared.info_dialog import InfoDialog
+from client.Shared.info_dialog import InfoDialog
 
 # Tokens (matched from info_dialog.py / all_results_list.py)
 BORDER_COLOR     = "#DDE0E8"
