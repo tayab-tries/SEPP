@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
@@ -26,8 +26,11 @@ from client.modules.examiner_dashboard.scripts.examiner_overview_theme import (
 
 
 class _AlertItem(QFrame):
+    dismiss_clicked = Signal(str)
+
     def __init__(self, spec: AlertSpec, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._spec = spec
         self.setObjectName("alertItem")
 
         accent, badge_bg, action_bg = {
@@ -111,7 +114,12 @@ class _AlertItem(QFrame):
 
     def _ghost_btn(self, text: str, bg: str) -> QPushButton:
         btn = QPushButton(text)
-        btn.setEnabled(False)
+        if text == "Dismiss":
+            btn.setEnabled(True)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.clicked.connect(self._on_dismiss)
+        else:
+            btn.setEnabled(False)
         btn.setFixedHeight(30)
         btn.setStyleSheet(
             f"""
@@ -128,8 +136,13 @@ class _AlertItem(QFrame):
         )
         return btn
 
+    def _on_dismiss(self):
+        self.dismiss_clicked.emit(self._spec.event_id)
+
 
 class AlertFeedCard(QFrame):
+    dismiss_requested = Signal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("alertFeedCard")
@@ -254,7 +267,9 @@ class AlertFeedCard(QFrame):
             self._alerts_layout.addStretch(1)
             return
         for spec in alerts:
-            self._alerts_layout.addWidget(_AlertItem(spec))
+            item_widget = _AlertItem(spec)
+            item_widget.dismiss_clicked.connect(self.dismiss_requested.emit)
+            self._alerts_layout.addWidget(item_widget)
         self._alerts_layout.addStretch(1)
 
     def set_latency(self, latency_ms: int) -> None:

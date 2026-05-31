@@ -343,16 +343,17 @@ class ExaminerExamMonitorView(QWidget):
         self._sessions.blockSignals(True)
         self._sessions.clear()
         for row in rows:
+            from client.core.contracts import resolve_student_name
             sid = row.get("session_id", "")
-            stu = str(row.get("student_id", ""))
-            stu_short = stu[:10] + "…" if len(stu) > 10 else stu
+            student_disp = resolve_student_name(row)
+            student_disp_short = student_disp[:12] + "…" if len(student_disp) > 12 else student_disp
             sid_short = str(sid)[:10] + "…" if len(str(sid)) > 10 else str(sid)
             integrity = row.get("integrity_score")
             integrity_text = f"{float(integrity):.0f}" if integrity is not None else "N/A"
             recommendation = str(row.get("integrity_recommendation") or "not_calculated")
             gaze_count = int(row.get("gaze_away_count") or 0)
             label = (
-                f"{sid_short} | {row.get('status')} | student {stu_short} | "
+                f"{sid_short} | {row.get('status')} | student {student_disp_short} | "
                 f"integrity {integrity_text} ({recommendation}) | gaze {gaze_count}"
             )
             item = QListWidgetItem(label)

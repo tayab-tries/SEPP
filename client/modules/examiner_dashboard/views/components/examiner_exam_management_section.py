@@ -108,8 +108,7 @@ class _ExamRow(QFrame):
 
     def __init__(self, spec: ExamRowSpec, last: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        border = "none" if last else f"border-bottom: 1px solid {BORDER};"
-        self.setStyleSheet(f"background: transparent; {border}")
+        self.setStyleSheet(f"background: transparent;")
 
         root = QHBoxLayout(self)
         root.setContentsMargins(_H_PAD, 18, _H_PAD, 18)
@@ -320,8 +319,6 @@ class ExamManagementCard(DashboardCard):
         col_header.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         col_header.setStyleSheet(
             f"background-color: #F7FAFD;"
-            f"border-top: 1px solid {BORDER};"
-            f"border-bottom: 1px solid {BORDER};"
         )
         ch_lay = QHBoxLayout(col_header)
         ch_lay.setContentsMargins(_H_PAD, 10, _H_PAD, 10)

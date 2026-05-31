@@ -280,6 +280,44 @@ def _http_update_exam_access_request(headers: dict, exam_id: str, request_id: st
         return {"status": -1, "data": str(exc)}
 
 
+def _http_approve_all_access_requests(headers: dict, exam_id: str) -> dict:
+    try:
+        r = requests.put(
+            f"{BASE_URL}/exams/{exam_id}/access-requests/approve-all",
+            headers=headers,
+            timeout=12,
+        )
+        return {"status": r.status_code, "data": r.json() if r.status_code == 200 else r.text}
+    except requests.RequestException as exc:
+        return {"status": -1, "data": str(exc)}
+
+
+def _http_revoke_all_access_requests(headers: dict, exam_id: str) -> dict:
+    try:
+        r = requests.put(
+            f"{BASE_URL}/exams/{exam_id}/access-requests/revoke-all",
+            headers=headers,
+            timeout=12,
+        )
+        return {"status": r.status_code, "data": r.json() if r.status_code == 200 else r.text}
+    except requests.RequestException as exc:
+        return {"status": -1, "data": str(exc)}
+
+
+def _http_add_manual_candidate(headers: dict, exam_id: str, email: str) -> dict:
+    try:
+        r = requests.post(
+            f"{BASE_URL}/exams/{exam_id}/access-requests/manual",
+            headers=headers,
+            json={"email": email},
+            timeout=12,
+        )
+        return {"status": r.status_code, "data": r.json() if r.status_code in (200, 201) else r.text}
+    except requests.RequestException as exc:
+        return {"status": -1, "data": str(exc)}
+
+
+
 def _http_fetch_overview_bundle(headers: dict) -> dict:
     classes_result = _http_fetch_classes(headers)
     exams_result = _http_fetch_my_exams(headers)
@@ -323,6 +361,7 @@ def _http_fetch_overview_bundle(headers: dict) -> dict:
             merged_event = dict(event)
             merged_event["exam_title"] = session.get("exam_title", "Exam")
             merged_event["student_id"] = session.get("student_id", "")
+            merged_event["student_name"] = session.get("student_name", "")
             recent_alerts.append(merged_event)
         if len(recent_alerts) >= 8:
             break
@@ -333,6 +372,18 @@ def _http_fetch_overview_bundle(headers: dict) -> dict:
         "sessions_by_exam": sessions_by_exam,
         "alerts": recent_alerts[:8],
     }
+
+
+def _http_dismiss_alert(headers: dict, event_id: str) -> dict:
+    try:
+        r = requests.post(
+            f"{BASE_URL}/proctoring-events/{event_id}/dismiss",
+            headers=headers,
+            timeout=10,
+        )
+        return {"status": r.status_code, "data": r.json() if r.status_code == 200 else r.text}
+    except requests.RequestException as exc:
+        return {"status": -1, "data": str(exc)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -599,6 +650,7 @@ class ExaminerDashboard(QWidget):
         self._overview_page.new_schedule_clicked.connect(self._open_create_exam_action)
         self._overview_page.delete_draft_requested.connect(self._confirm_delete_draft)
         self._overview_page.status_change_requested.connect(self._patch_exam_status)
+        self._overview_page.dismiss_alert_requested.connect(self._dismiss_alert)
         self._class_page.refresh_exams_requested.connect(self._load_class_exams_for_selected)
         self._class_page.refresh_enrollments_requested.connect(self._load_class_enrollments_for_selected)
         self._class_page.enrollment_approve_requested.connect(self._approve_enrollment)
@@ -612,6 +664,9 @@ class ExaminerDashboard(QWidget):
         self._requests_page.exam_selected.connect(self._load_exam_access_requests)
         self._requests_page.approve_requested.connect(self._approve_exam_access_request)
         self._requests_page.reject_requested.connect(self._reject_exam_access_request)
+        self._requests_page.approve_all_requested.connect(self._approve_all_access_requests)
+        self._requests_page.revoke_all_requested.connect(self._revoke_all_access_requests)
+        self._requests_page.add_candidate_requested.connect(self._add_candidate_manually)
         self._assessments_page.assessment_exam_selected.connect(self._on_assessment_exam_selected)
         self._assessment_details_page.back_requested.connect(self._on_assessment_details_back)
         self._assessment_details_page.view_logs_requested.connect(self._on_assessment_view_logs)
@@ -957,13 +1012,16 @@ class ExaminerDashboard(QWidget):
         return any(int(counts.get(level, 0)) > 0 for level in ("medium", "high", "critical"))
 
     def _to_alert_spec(self, event: dict) -> AlertSpec:
+        from client.core.contracts import resolve_student_name
         severity = str(event.get("severity") or "info").lower()
-        student_id = str(event.get("student_id") or "student")
+        student_disp = resolve_student_name(event)
         event_type = str(event.get("event_type") or "event").replace("_", " ").title()
         body = self._event_body(event)
+        event_id = str(event.get("event_id") or event.get("id") or "")
         return AlertSpec(
+            event_id=event_id,
             severity=severity if severity in {"critical", "moderate", "info"} else ("moderate" if severity in {"medium", "high"} else "info"),
-            title=f"{student_id[:12]} - {event_type}",
+            title=f"{student_disp} - {event_type}",
             body=body,
             age=self._relative_age(event.get("timestamp") or event.get("server_received_at")),
             action_primary=self._primary_action_for_severity(severity),
@@ -1059,11 +1117,7 @@ class ExaminerDashboard(QWidget):
         if widget is self._requests_page:
             self._sidebar.set_active(self.NAV_REPORTS)
             self._top_bar.set_section_title("Access Request Center")
-            self._scaffold.set_header_visible(True)
-            self._header.set_text(
-                "Exam Access Requests",
-                "Approve or reject direct exam-join requests using the current examiner theme.",
-            )
+            self._scaffold.set_header_visible(False)
             return
 
         if widget is self._settings_page:
@@ -1455,6 +1509,7 @@ class ExaminerDashboard(QWidget):
         )
         self._selected_requests_exam_id = exam_id
         self._selected_requests_exam_title = str(selected_row.get("title") or "Selected exam")
+        self._requests_page.set_selected_exam(selected_row)
         if self._worker_is_running("_access_requests_worker"):
             self._access_requests_refresh_pending = True
             self._access_requests_pending_exam_id = exam_id
@@ -1571,6 +1626,25 @@ class ExaminerDashboard(QWidget):
             )
         )
         self._access_request_action_worker.start()
+
+    @Slot(str)
+    def _dismiss_alert(self, event_id: str):
+        if not event_id or not self._token:
+            return
+        # We start an ApiWorker to call the dismiss endpoint on the server
+        worker = self._track_worker(
+            ApiWorker(_http_dismiss_alert, self._headers(), event_id)
+        )
+        def _on_done(result: dict):
+            if result.get("status") == 200:
+                self._status.setText("Alert dismissed successfully.")
+                self._load_overview_data()  # Refresh overview data
+            else:
+                self._status.setText(f"Failed to dismiss alert: {result.get('text', 'Unknown error')}")
+
+        worker.finished.connect(_on_done)
+        worker.errored.connect(lambda e: self._status.setText(f"Network error dismissing alert: {e}"))
+        worker.start()
 
     @Slot(str, str)
     def _patch_exam_status(self, exam_id: str, new_status: str):
@@ -1700,9 +1774,9 @@ class ExaminerDashboard(QWidget):
                 "Use the examiner dashboard to schedule it or move it live."
             )
             self._status.setText(message)
-            self._exam_creation_page.set_status_message(message)
             self._exam_creation_page.set_submit_busy(False)
             self._load_overview_data()
+            self._switch_page(self._overview_page)
 
         self._exam_submit_worker.finished.connect(_on_done)
         self._exam_submit_worker.errored.connect(
@@ -1770,6 +1844,11 @@ class ExaminerDashboard(QWidget):
         item.setForeground(QColor(severity_color(severity)))
         self._events.insertItem(0, item)
 
+        # Real-time update of metrics and active students counts
+        if event_type in ("student_status_update", "student_flag"):
+            self._load_overview_data()
+            self._refresh_sessions()
+
     @Slot(str)
     def _append_error_event(self, message: str):
         self._events.insertItem(0, f"[error] {message}")
@@ -1820,3 +1899,119 @@ class ExaminerDashboard(QWidget):
             lambda e: self._status.setText("Failed to load session detail.")
         )
         self._details_worker.start()
+
+    @Slot(str)
+    def _approve_all_access_requests(self, exam_id: str):
+        if not exam_id or not self._token:
+            return
+        self._requests_page.set_status_message("Approving all requests…")
+        self._requests_page.set_busy(True)
+        generation = self._session_generation
+        self._access_request_action_worker = self._track_worker(
+            ApiWorker(
+                _http_approve_all_access_requests,
+                self._headers(),
+                exam_id,
+            ),
+            "_access_request_action_worker",
+        )
+
+        def _on_done(result: dict):
+            if generation != self._session_generation:
+                return
+            if result["status"] != 200:
+                self._requests_page.set_busy(False)
+                self._requests_page.set_status_message(
+                    f"Approve all failed: {str(result['data'])[:300]}"
+                )
+                return
+            self._requests_page.set_status_message("All requests approved successfully.")
+            self._refresh_access_requests_page()
+            self._load_overview_data()
+
+        self._access_request_action_worker.finished.connect(_on_done)
+        self._access_request_action_worker.errored.connect(
+            lambda e: generation == self._session_generation and (
+                self._requests_page.set_busy(False),
+                self._requests_page.set_status_message("Network error while trying to approve all requests."),
+            )
+        )
+        self._access_request_action_worker.start()
+
+    @Slot(str)
+    def _revoke_all_access_requests(self, exam_id: str):
+        if not exam_id or not self._token:
+            return
+        self._requests_page.set_status_message("Revoking all access…")
+        self._requests_page.set_busy(True)
+        generation = self._session_generation
+        self._access_request_action_worker = self._track_worker(
+            ApiWorker(
+                _http_revoke_all_access_requests,
+                self._headers(),
+                exam_id,
+            ),
+            "_access_request_action_worker",
+        )
+
+        def _on_done(result: dict):
+            if generation != self._session_generation:
+                return
+            if result["status"] != 200:
+                self._requests_page.set_busy(False)
+                self._requests_page.set_status_message(
+                    f"Revoke all failed: {str(result['data'])[:300]}"
+                )
+                return
+            self._requests_page.set_status_message("All access revoked successfully.")
+            self._refresh_access_requests_page()
+            self._load_overview_data()
+
+        self._access_request_action_worker.finished.connect(_on_done)
+        self._access_request_action_worker.errored.connect(
+            lambda e: generation == self._session_generation and (
+                self._requests_page.set_busy(False),
+                self._requests_page.set_status_message("Network error while trying to revoke all access."),
+            )
+        )
+        self._access_request_action_worker.start()
+
+    @Slot(str, str)
+    def _add_candidate_manually(self, exam_id: str, email: str):
+        if not exam_id or not email or not self._token:
+            return
+        self._requests_page.set_status_message(f"Adding candidate {email}…")
+        self._requests_page.set_busy(True)
+        generation = self._session_generation
+        self._access_request_action_worker = self._track_worker(
+            ApiWorker(
+                _http_add_manual_candidate,
+                self._headers(),
+                exam_id,
+                email,
+            ),
+            "_access_request_action_worker",
+        )
+
+        def _on_done(result: dict):
+            if generation != self._session_generation:
+                return
+            if result["status"] not in (200, 201):
+                self._requests_page.set_busy(False)
+                self._requests_page.set_status_message(
+                    f"Add candidate failed: {str(result['data'])[:300]}"
+                )
+                return
+            self._requests_page.set_status_message(f"Candidate {email} added successfully.")
+            self._refresh_access_requests_page()
+            self._load_overview_data()
+
+        self._access_request_action_worker.finished.connect(_on_done)
+        self._access_request_action_worker.errored.connect(
+            lambda e: generation == self._session_generation and (
+                self._requests_page.set_busy(False),
+                self._requests_page.set_status_message("Network error while trying to add candidate."),
+            )
+        )
+        self._access_request_action_worker.start()
+

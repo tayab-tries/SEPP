@@ -148,17 +148,16 @@ class ExaminerClassView(QWidget):
         self.set_enrollments([])
 
     def set_enrollments(self, rows: list[dict]):
+        from client.core.contracts import resolve_student_name
         self._enrollments_list.clear()
         if not rows:
             self._enrollments_list.addItem("No enrollment requests yet.")
             self._update_enrollment_buttons()
             return
         for row in rows:
-            enrollment_id = str(row.get("enrollment_id", ""))
-            student_id = str(row.get("student_id", ""))
             approved = bool(row.get("approved"))
             status = "Approved" if approved else "Pending"
-            student_disp = student_id[:12] + "..." if len(student_id) > 12 else student_id
+            student_disp = resolve_student_name(row)
             item = QListWidgetItem(f"{student_disp} | {status}")
             item.setData(Qt.ItemDataRole.UserRole, row)
             self._enrollments_list.addItem(item)
