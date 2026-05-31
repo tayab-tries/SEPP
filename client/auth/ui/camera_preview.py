@@ -194,38 +194,41 @@ class _CameraPreviewLabel(QLabel):
     """
 
     def paintEvent(self, event):
+        from PySide6.QtCore import QRectF
+        from PySide6.QtGui import QBrush
+
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
 
         w, h = self.width(), self.height()
-        radius = 0
+        radius = 12.0
 
-        # Clip everything to rounded rect — fixes corner overpainting
-        clip_path = QPainterPath()
-        clip_path.addRoundedRect(0, 0, w, h, radius, radius)
-        painter.setClipPath(clip_path)
-
-        # Fill background
-        painter.fillRect(self.rect(), QColor("#C8CDD8"))
+        path = QPainterPath()
+        # Draw exactly at the bounds to avoid tiny margins and brush misalignment
+        path.addRoundedRect(0, 0, w, h, radius, radius)
 
         pix = self.pixmap()
         if pix and not pix.isNull():
-            # Re-scale with horizontal padding so feed doesn't hug the edges
-            pad_x = 24
-            available_w = w - 2 * pad_x
-            scaled = pix.scaled(
-                available_w, h,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-            x = (w - scaled.width()) // 2
-            y = (h - scaled.height()) // 2
-            painter.drawPixmap(x, y, scaled)
-
+            # QBrush perfectly maps the texture and antialiases the rounded corners
+            brush = QBrush(pix)
+            painter.fillPath(path, brush)
         else:
-            # Placeholder text when camera not started
+            # Draw placeholder background
+            painter.fillPath(path, QColor("#C8CDD8"))
+            # Draw placeholder text
             painter.setPen(QColor("#4A5568"))
+            font = painter.font()
+            font.setPixelSize(13)
+            font.setBold(True)
+            painter.setFont(font)
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self.text())
+
+        # Draw the subtle border over the image/background
+        pen = QPen(QColor(160, 185, 220, 127))
+        pen.setWidthF(1.0)
+        painter.setPen(pen)
+        painter.drawPath(path)
 
         painter.end()
 
@@ -248,8 +251,8 @@ class EmbeddedCameraCaptureWidget(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._camera_index = camera_index
-        self._preview_width = 430
-        self._preview_height = 220
+        self._preview_width = 400
+        self._preview_height = 225
         self._camera_thread: Optional[_EmbeddedCameraThread] = None
         self._last_frame = None
         self._captured_frame = None
@@ -345,16 +348,7 @@ class EmbeddedCameraCaptureWidget(QWidget):
         self._preview = _CameraPreviewLabel("")
         self._preview.setFixedSize(self._preview_width, self._preview_height)
         self._preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview.setStyleSheet("""
-            QLabel {
-                background-color: #C8CDD8;
-                border: 1px solid rgba(160, 185, 220, 0.5);
-                border-radius: 0px;
-                color: #4A5568;
-                font-size: 13px;
-                font-weight: 600;
-            }
-        """)
+        # Note: Background, border, and rounding are drawn manually in paintEvent
         layout.addWidget(self._preview, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addSpacing(14)
 
@@ -474,14 +468,12 @@ class EmbeddedCameraCaptureWidget(QWidget):
                 for (x, y, w, h) in self._bboxes:
                     cv2.rectangle(preview_arr, (x, y), (x+w, y+h), color, 3)
 
-            h2, w2 = preview_arr.shape[:2]
-            ui_img = QImage(preview_arr.data.tobytes(), w2, h2, 3 * w2, QImage.Format.Format_RGB888)
-            pix = QPixmap.fromImage(ui_img).scaled(
-                self._preview_width,
-                self._preview_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            # High-quality downscale using OpenCV INTER_AREA
+            resized_arr = cv2.resize(preview_arr, (self._preview_width, self._preview_height), interpolation=cv2.INTER_AREA)
+
+            h2, w2 = resized_arr.shape[:2]
+            ui_img = QImage(resized_arr.data.tobytes(), w2, h2, 3 * w2, QImage.Format.Format_RGB888)
+            pix = QPixmap.fromImage(ui_img)
             self._preview.setPixmap(pix)
 
     # ── Capture / quality ───────────────────────────────────────────────
@@ -515,14 +507,13 @@ class EmbeddedCameraCaptureWidget(QWidget):
 
     def _show_frozen_frame(self, frame):
             rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            fh, fw = rgb.shape[:2]
-            img = QImage(rgb.data.tobytes(), fw, fh, 3 * fw, QImage.Format.Format_RGB888)
-            pix = QPixmap.fromImage(img).scaled(
-                self._preview_width,
-                self._preview_height,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
+            
+            # High-quality downscale using OpenCV INTER_AREA
+            resized_arr = cv2.resize(rgb, (self._preview_width, self._preview_height), interpolation=cv2.INTER_AREA)
+            
+            fh, fw = resized_arr.shape[:2]
+            img = QImage(resized_arr.data.tobytes(), fw, fh, 3 * fw, QImage.Format.Format_RGB888)
+            pix = QPixmap.fromImage(img)
             self._preview.setPixmap(pix)
 
     def _quality_warning(self, frame) -> str:
