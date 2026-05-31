@@ -90,7 +90,7 @@ def extract_embedding(image_path: str) -> Optional[list[float]]:
 def verify_embedding(
     image_path: str,
     stored_embedding: list[float],
-    threshold: float = 0.80,
+    threshold: float = 0.60,
 ) -> dict:
     """
     Compare a live face image against a stored enrollment embedding.
