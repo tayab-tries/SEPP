@@ -1164,7 +1164,13 @@ class ExaminerDashboard(QWidget):
             if self._active_exam_title:
                 self._switch_page(self._exam_monitor_page)
             else:
-                self._go_home()
+                from client.Shared.info_dialog import InfoDialog
+                dlg = InfoDialog(
+                    title="Live Monitoring",
+                    body="This Feature Is Being Developed",
+                    parent=self,
+                )
+                dlg.exec_()
             return
         if label == self.NAV_REPORTS:
             self._open_access_requests_page()
