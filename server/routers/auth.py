@@ -26,7 +26,7 @@ from server.database import get_db
 from server.config import get_settings
 from server.models.models import User
 from server.dependencies import get_current_user
-from server.services.face_service import extract_embedding, verify_embedding
+from server.services.face_service import extract_embedding, verify_embedding, MultipleFacesError
 from shared.constants import Role
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -99,8 +99,14 @@ async def register_with_face(
 
     try:
         embedding = extract_embedding(tmp_path)
+    except MultipleFacesError:
+        raise HTTPException(
+            status_code=422,
+            detail="Multiple faces detected. Please ensure only you are in the camera frame.",
+        )
     finally:
-        os.unlink(tmp_path)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
     if embedding is None:
         raise HTTPException(
@@ -182,8 +188,14 @@ async def enroll_face(
 
     try:
         embedding = extract_embedding(tmp_path)
+    except MultipleFacesError:
+        raise HTTPException(
+            status_code=422,
+            detail="Multiple faces detected. Please ensure only you are in the camera frame.",
+        )
     finally:
-        os.unlink(tmp_path)
+        if os.path.exists(tmp_path):
+            os.unlink(tmp_path)
 
     if embedding is None:
         raise HTTPException(
