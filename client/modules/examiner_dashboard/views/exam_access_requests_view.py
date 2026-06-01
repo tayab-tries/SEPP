@@ -663,7 +663,7 @@ class ExaminerAccessRequestsView(QWidget):
         right_header.addWidget(self._download_btn)
         right_lay.addLayout(right_header)
 
-        self.approved_subtitle = QLabel("0 Students in Session")
+        self.approved_subtitle = QLabel("0 Approved Students")
         self.approved_subtitle.setStyleSheet("font-size: 12px; color: #43474e; font-weight: 500; border: none;")
         right_lay.addWidget(self.approved_subtitle)
 
@@ -756,7 +756,7 @@ class ExaminerAccessRequestsView(QWidget):
             self.status_pill.hide()
             self._pending_scroll.clear()
             self._approved_scroll.clear()
-            self.approved_subtitle.setText("0 Students in Session")
+            self.approved_subtitle.setText("0 Approved Students")
             return
 
         for row in rows:
@@ -844,7 +844,7 @@ class ExaminerAccessRequestsView(QWidget):
         self._approved_candidates = [r for r in rows if r.get("approved")]
 
         # Update Approved subtitle
-        self.approved_subtitle.setText(f"{len(self._approved_candidates)} Students in Session")
+        self.approved_subtitle.setText(f"{len(self._approved_candidates)} Approved Students")
 
         # Populate Pending list
         for r in self._pending_requests:
@@ -891,7 +891,7 @@ class ExaminerAccessRequestsView(QWidget):
             self.status_pill.hide()
             self._pending_scroll.clear()
             self._approved_scroll.clear()
-            self.approved_subtitle.setText("0 Students in Session")
+            self.approved_subtitle.setText("0 Approved Students")
             return
 
         self._selected_exam_id = str(row["exam_id"])

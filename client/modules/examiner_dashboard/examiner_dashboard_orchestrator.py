@@ -430,6 +430,11 @@ class ExaminerDashboard(QWidget):
         self._access_requests_pending_exam_id = ""
         self._is_deleted = False
 
+        # 5-second polling timer — only fires _load_overview_data when on overview page
+        self._poll_timer = QTimer(self)
+        self._poll_timer.setInterval(5000)
+        self._poll_timer.timeout.connect(self._on_poll_tick)
+
         self._classes = QListWidget()
         self._my_exams = QListWidget()
         self._exam_id_input = QLineEdit()
@@ -538,6 +543,8 @@ class ExaminerDashboard(QWidget):
 
     def _reset_session_state(self):
         self._stop_ws_worker()
+        if hasattr(self, "_poll_timer"):
+            self._poll_timer.stop()
         self._class_rows = []
         self._owned_exam_rows = []
         self._selected_class = {}
@@ -869,6 +876,16 @@ class ExaminerDashboard(QWidget):
         self._full_name = full_name
         self._top_bar.update_user_info(full_name)
         self._load_overview_data()
+        self._poll_timer.start()
+
+    @Slot()
+    def _on_poll_tick(self):
+        """Called every 5 s. Only refreshes the overview when that page is visible."""
+        if not self._token or self._is_deleted:
+            self._poll_timer.stop()
+            return
+        if self._stack.currentWidget() is self._overview_page:
+            self._load_overview_data()
 
     def _headers(self):
         return {"Authorization": f"Bearer {self._token}"}
@@ -982,11 +999,12 @@ class ExaminerDashboard(QWidget):
                 1 for session in exam_sessions
                 if str(session.get("status", "")).lower() in {"active", "locked", "verifying"}
             )
-            if str(status).lower() == "active" and active_count > 0:
+            approved_count = exam.get("approved_count", 0)
+            if str(status).lower() == "live" and active_count > 0:
                 students = f"{active_count} Students"
                 avatar_count = active_count
             else:
-                students = f"{max(len(exam_sessions), 0)} Students"
+                students = f"{max(approved_count, 0)} Students"
                 avatar_count = 0
             overview_exams.append(
                 ExamRowSpec(

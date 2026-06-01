@@ -163,7 +163,7 @@ class _ExamRow(QFrame):
         stl = QHBoxLayout(stu_w)
         stl.setContentsMargins(0, 0, 0, 0)
 
-        if spec.status.lower() == "active" and spec.avatar_count > 0:
+        if spec.status.lower() == "live" and spec.avatar_count > 0:
             stl.addWidget(
                 _AvatarStack(spec.avatar_count),
                 0,
