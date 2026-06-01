@@ -423,6 +423,63 @@ async def main() -> None:
         )
         print("STEP forced terminate OK")
 
+        # Test new endpoints: manual access, approve-all, revoke-all
+        from server.routers.exams import (
+            add_manual_exam_access,
+            approve_all_exam_access_requests,
+            revoke_all_exam_access_requests,
+            ManualAccessRequest,
+            ExamAccessRequest,
+        )
+
+        # 1. Test revoke all (first) to clear existing access
+        revoke_res = revoke_all_exam_access_requests(
+            exam2_id,
+            current_user=examiner,
+            db=db,
+        )
+        approved_after_revoke = db.query(ExamAccessRequest).filter(
+            ExamAccessRequest.exam_id == exam2_id,
+            ExamAccessRequest.approved == True
+        ).count()
+        require(approved_after_revoke == 0, "Revoke all should remove all approved access requests")
+        print("STEP revoke-all OK")
+
+        # 2. Test manual addition
+        manual_res = add_manual_exam_access(
+            exam2_id,
+            payload=ManualAccessRequest(email=student.email),
+            current_user=examiner,
+            db=db,
+        )
+        require(manual_res["approved"] is True, "Manual addition should create approved access request")
+        print("STEP manual candidate add OK")
+
+        # Revoke again to test pending flow
+        revoke_all_exam_access_requests(exam2_id, current_user=examiner, db=db)
+
+        # Create a pending request again
+        join_exam_by_code(exam2["join_code"], current_user=student, db=db)
+        
+        pending_after_join = db.query(ExamAccessRequest).filter(
+            ExamAccessRequest.exam_id == exam2_id,
+            ExamAccessRequest.approved == False
+        ).count()
+        require(pending_after_join == 1, "Pending request should be created")
+
+        # 3. Test approve all
+        approve_all_res = approve_all_exam_access_requests(
+            exam2_id,
+            current_user=examiner,
+            db=db,
+        )
+        pending_after_approve_all = db.query(ExamAccessRequest).filter(
+            ExamAccessRequest.exam_id == exam2_id,
+            ExamAccessRequest.approved == False
+        ).count()
+        require(pending_after_approve_all == 0, "Approve all should resolve all pending requests")
+        print("STEP approve-all OK")
+
         print("ALL E2E CORE STEPS PASSED")
     finally:
         if session1_id:

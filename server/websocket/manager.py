@@ -386,9 +386,13 @@ class ConnectionManager:
         to the examiner dashboard immediately.
         Builds SHA-256 chain hash for tamper evidence.
         """
-        from server.models.models import ProctoringEvent
+        from server.models.models import ProctoringEvent, ExamSession
         from server.services.integrity import refresh_integrity_score
         from shared.constants import EventSeverity, EVENT_SEVERITY_MAP, EventType
+
+        # Fetch student name for the session
+        session = db.query(ExamSession).filter(ExamSession.id == session_id).first()
+        student_name = session.student.full_name if session and session.student else "Student"
 
         # Fetch last chain hash for this session
         last_event = (
@@ -421,13 +425,16 @@ class ConnectionManager:
                 chain_hash=chain_hash,
             )
             db.add(event)
+            db.flush()  # Generate event.id
             prev_hash = chain_hash
 
             # Push high/critical events to examiner dashboard immediately
             if severity in (EventSeverity.HIGH, EventSeverity.CRITICAL):
                 await self.broadcast_to_examiners(exam_id, {
                     "type": WSMessageType.STUDENT_FLAG,
+                    "event_id": event.id,
                     "session_id": session_id,
+                    "student_name": student_name,
                     "event_type": event_type,
                     "severity": severity,
                     "timestamp": event_data["timestamp"],

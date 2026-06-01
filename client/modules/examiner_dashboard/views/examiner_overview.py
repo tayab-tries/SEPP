@@ -20,6 +20,7 @@ class ExaminerOverviewPage(QWidget):
     new_schedule_clicked = Signal()
     delete_draft_requested = Signal(str)
     status_change_requested = Signal(str, str)
+    dismiss_alert_requested = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -50,6 +51,7 @@ class ExaminerOverviewPage(QWidget):
 
         root.addWidget(left, 1)
         self._alert_feed = AlertFeedCard()
+        self._alert_feed.dismiss_requested.connect(self.dismiss_alert_requested)
         root.addWidget(self._alert_feed)
 
     def set_overview_data(

@@ -26,6 +26,7 @@ class ExamRowSpec:
 
 @dataclass(frozen=True)
 class AlertSpec:
+    event_id: str
     severity: str
     title: str
     body: str

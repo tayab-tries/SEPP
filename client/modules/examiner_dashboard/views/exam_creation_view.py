@@ -59,14 +59,6 @@ class ExamCreationView(QWidget):
         )
         self._hint.setWordWrap(True)
 
-        self._require_liveness = QCheckBox(
-            "Require entry liveness + face match at exam start (require_liveness_check; "
-            "face enrollment is still required by the server to start any session)"
-        )
-        self._require_liveness.setChecked(True)
-        self._allow_paste = QCheckBox("Allow paste in essay answers")
-        self._allow_paste.setChecked(False)
-        self._max_window_switches = QSpinBox()
         self._max_face_absent = QSpinBox()
         self._face_recheck_minutes = QSpinBox()
 
@@ -99,6 +91,12 @@ class ExamCreationView(QWidget):
                 border: 1px solid {SHELL_BORDER};
                 border-radius: 18px;
             }}
+            QLabel#sectionHeading {{
+                font-size: 20px;
+                font-weight: 800;
+                color: {SHELL_TEXT};
+                background: transparent;
+            }}
             QLabel#fieldLabel {{
                 color: {SHELL_TEXT};
                 font-size: 13px;
@@ -121,11 +119,12 @@ class ExamCreationView(QWidget):
                 border: 1px solid {SHELL_BORDER};
                 border-radius: 12px;
                 color: #1F2937;
-                padding: 10px 12px;
+                padding: 10px 14px;
+                font-size: 13px;
                 selection-background-color: #D9E7FF;
             }}
             QLineEdit:focus, QTextEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {{
-                border: 1px solid {SHELL_ACTION};
+                border: 1.5px solid {SHELL_ACTION};
             }}
             QListWidget {{
                 padding: 8px;
@@ -145,36 +144,44 @@ class ExamCreationView(QWidget):
                 background-color: #EDF4FF;
             }}
             QCheckBox {{
-                color: #243043;
-                spacing: 8px;
+                color: {SHELL_TEXT};
+                spacing: 10px;
+                font-size: 13px;
+                font-weight: 600;
                 background: transparent;
             }}
             QCheckBox::indicator {{
-                width: 18px;
-                height: 18px;
+                width: 20px;
+                height: 20px;
             }}
             QCheckBox::indicator:unchecked {{
-                border: 1px solid {SHELL_BORDER};
-                border-radius: 5px;
+                border: 1.5px solid {SHELL_BORDER};
+                border-radius: 6px;
                 background: white;
             }}
             QCheckBox::indicator:checked {{
-                border: 1px solid {SHELL_ACTION};
-                border-radius: 5px;
+                border: 1.5px solid {SHELL_ACTION};
+                border-radius: 6px;
                 background: {SHELL_ACTION};
             }}
             QPushButton {{
                 border: none;
                 border-radius: 12px;
-                padding: 10px 16px;
+                padding: 11px 22px;
+                font-size: 13px;
                 font-weight: 700;
             }}
             QPushButton#primaryButton {{
                 background-color: {SHELL_ACTION};
                 color: white;
+                min-width: 120px;
             }}
             QPushButton#primaryButton:hover {{
                 background-color: {SHELL_ACTION_HOVER};
+            }}
+            QPushButton#primaryButton:disabled {{
+                background-color: #A0B4D0;
+                color: #E0E7EF;
             }}
             QPushButton#secondaryButton {{
                 background-color: #EAF0F7;
@@ -183,6 +190,14 @@ class ExamCreationView(QWidget):
             }}
             QPushButton#secondaryButton:hover {{
                 background-color: #DDE7F2;
+            }}
+            QPushButton#dangerButton {{
+                background-color: #FEF2F2;
+                color: #991B1B;
+                border: 1px solid #FECACA;
+            }}
+            QPushButton#dangerButton:hover {{
+                background-color: #FEE2E2;
             }}
             """
         )
@@ -207,11 +222,11 @@ class ExamCreationView(QWidget):
         root.setSpacing(12)
 
         top = QHBoxLayout()
-        back = QPushButton("Back to Dashboard")
-        back.setObjectName("secondaryButton")
+        back = QPushButton("  ←  Back to Dashboard")
+        self._apply_btn_style(back, "secondary")
         back.clicked.connect(self.back_requested.emit)
-        submit = QPushButton("Create draft exam + questions")
-        submit.setObjectName("primaryButton")
+        submit = QPushButton("  Create Draft Exam  ")
+        self._apply_btn_style(submit, "primary")
         submit.clicked.connect(self._emit_submit)
         self._back_btn = back
         self._submit_btn = submit
@@ -258,21 +273,17 @@ class ExamCreationView(QWidget):
 
         self._hint.setObjectName("supportText")
         meta.addWidget(self._hint)
-        meta.addWidget(self._require_liveness)
-        meta.addWidget(self._allow_paste)
+
         proc_row = QHBoxLayout()
-        self._max_window_switches.setRange(0, 50)
-        self._max_window_switches.setValue(3)
         self._max_face_absent.setRange(1, 600)
         self._max_face_absent.setValue(10)
         self._face_recheck_minutes.setRange(1, 240)
         self._face_recheck_minutes.setValue(5)
-        proc_row.addWidget(self._make_field_label("Max window switches"))
-        proc_row.addWidget(self._max_window_switches)
         proc_row.addWidget(self._make_field_label("Max face absent (sec)"))
         proc_row.addWidget(self._max_face_absent)
         proc_row.addWidget(self._make_field_label("Face re-check (min)"))
         proc_row.addWidget(self._face_recheck_minutes)
+        proc_row.addStretch(1)
         meta.addLayout(proc_row)
         root.addWidget(meta_card)
 
@@ -324,16 +335,18 @@ class ExamCreationView(QWidget):
         self._preview_layout.setSpacing(0)
         q.addWidget(self._preview_host, 1)
 
-        add_q_btn = QPushButton("Add Question")
-        add_q_btn.setObjectName("primaryButton")
+        add_q_btn = QPushButton("＋  Add Question")
+        self._apply_btn_style(add_q_btn, "primary")
         add_q_btn.clicked.connect(self._add_question)
         edit_row = QHBoxLayout()
-        update_btn = QPushButton("Update Selected")
-        remove_btn = QPushButton("Remove Selected")
-        move_up_btn = QPushButton("Move Up")
-        move_down_btn = QPushButton("Move Down")
-        for button in (update_btn, remove_btn, move_up_btn, move_down_btn):
-            button.setObjectName("secondaryButton")
+        edit_row.setSpacing(8)
+        update_btn = QPushButton("✎  Update")
+        remove_btn = QPushButton("✕  Remove")
+        move_up_btn = QPushButton("▲  Up")
+        move_down_btn = QPushButton("▼  Down")
+        for button in (update_btn, move_up_btn, move_down_btn):
+            self._apply_btn_style(button, "secondary")
+        self._apply_btn_style(remove_btn, "danger")
         update_btn.clicked.connect(self._update_selected_question)
         remove_btn.clicked.connect(self._remove_selected_question)
         move_up_btn.clicked.connect(self._move_selected_up)
@@ -372,6 +385,60 @@ class ExamCreationView(QWidget):
         label.setObjectName("fieldLabel")
         return label
 
+    @staticmethod
+    def _apply_btn_style(btn: QPushButton, variant: str = "primary") -> None:
+        """Apply inline styles to buttons to override parent orchestrator styles."""
+        if variant == "primary":
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {SHELL_ACTION};
+                    color: #FFFFFF;
+                    border: none;
+                    border-radius: 12px;
+                    padding: 11px 24px;
+                    font-size: 13px;
+                    font-weight: 700;
+                    min-width: 120px;
+                }}
+                QPushButton:hover {{
+                    background-color: {SHELL_ACTION_HOVER};
+                }}
+                QPushButton:disabled {{
+                    background-color: #A0B4D0;
+                    color: #E0E7EF;
+                }}
+            """)
+        elif variant == "secondary":
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: #EAF0F7;
+                    color: {SHELL_TEXT};
+                    border: 1px solid {SHELL_BORDER};
+                    border-radius: 12px;
+                    padding: 11px 22px;
+                    font-size: 13px;
+                    font-weight: 700;
+                }}
+                QPushButton:hover {{
+                    background-color: #DDE7F2;
+                }}
+            """)
+        elif variant == "danger":
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #FEF2F2;
+                    color: #991B1B;
+                    border: 1px solid #FECACA;
+                    border-radius: 12px;
+                    padding: 11px 22px;
+                    font-size: 13px;
+                    font-weight: 700;
+                }
+                QPushButton:hover {
+                    background-color: #FEE2E2;
+                }
+            """)
+
     def _wire(self):
         self._q_type.currentTextChanged.connect(self._on_question_type_changed)
         self._q_type.currentTextChanged.connect(self._refresh_question_preview)
@@ -397,9 +464,6 @@ class ExamCreationView(QWidget):
         self._editing_index = None
         self._status.setText("")
         self.set_submit_busy(False)
-        self._require_liveness.setChecked(True)
-        self._allow_paste.setChecked(False)
-        self._max_window_switches.setValue(3)
         self._max_face_absent.setValue(10)
         self._face_recheck_minutes.setValue(5)
 
@@ -649,10 +713,8 @@ class ExamCreationView(QWidget):
             "duration_minutes": int(self._duration_input.value()),
             "scheduled_start": self._scheduled_start_input.text().strip() or None,
             "scheduled_end": self._scheduled_end_input.text().strip() or None,
-            "max_window_switches": int(self._max_window_switches.value()),
             "max_face_absent_seconds": int(self._max_face_absent.value()),
-            "allow_paste_in_essay": bool(self._allow_paste.isChecked()),
-            "require_liveness_check": bool(self._require_liveness.isChecked()),
+
             "face_recheck_interval_minutes": int(self._face_recheck_minutes.value()),
         }
         self.submit_requested.emit(payload, list(self._questions))
@@ -670,9 +732,6 @@ class ExamCreationView(QWidget):
         self._scheduled_start_input.clear()
         self._scheduled_end_input.clear()
         self._duration_input.setValue(60)
-        self._require_liveness.setChecked(True)
-        self._allow_paste.setChecked(False)
-        self._max_window_switches.setValue(3)
         self._max_face_absent.setValue(10)
         self._face_recheck_minutes.setValue(5)
         self._clear_question_form()
@@ -687,6 +746,6 @@ class ExamCreationView(QWidget):
         self._submit_busy = busy
         if self._submit_btn is not None:
             self._submit_btn.setEnabled(not busy)
-            self._submit_btn.setText("Creating draft…" if busy else "Create draft exam + questions")
+            self._submit_btn.setText("  Creating Draft…  " if busy else "  Create Draft Exam  ")
         if self._back_btn is not None:
             self._back_btn.setEnabled(not busy)

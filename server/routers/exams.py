@@ -23,7 +23,7 @@ import string
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import case, or_
 from pydantic import BaseModel
@@ -383,6 +383,7 @@ def get_enrollments(
         {
             "enrollment_id": e.id,
             "student_id": e.student_id,
+            "student_name": e.student.full_name if e.student else "Unknown Student",
             "approved": e.approved,
             "enrolled_at": e.enrolled_at,
         }
@@ -705,6 +706,14 @@ def list_examiner_exams(
     rows = []
     for e in exams:
         c = class_map.get(e.class_id)
+        waiting_count = db.query(ExamAccessRequest).filter(
+            ExamAccessRequest.exam_id == e.id,
+            ExamAccessRequest.approved == False,
+        ).count()
+        approved_count = db.query(ExamAccessRequest).filter(
+            ExamAccessRequest.exam_id == e.id,
+            ExamAccessRequest.approved == True,
+        ).count()
         rows.append(
             {
                 "exam_id": e.id,
@@ -717,6 +726,8 @@ def list_examiner_exams(
                 "duration_minutes": e.duration_minutes,
                 "scheduled_start": e.scheduled_start,
                 "scheduled_end": e.scheduled_end,
+                "waiting_count": waiting_count,
+                "approved_count": approved_count,
             }
         )
     return rows
@@ -1216,6 +1227,7 @@ def approve_exam_access_request(
 def reject_exam_access_request(
     exam_id: str,
     request_id: str,
+    background_tasks: BackgroundTasks = None,
     current_user: User = Depends(require_examiner),
     db: Session = Depends(get_db),
 ):
@@ -1238,6 +1250,44 @@ def reject_exam_access_request(
     if not access_request:
         raise HTTPException(status_code=404, detail="Access request not found")
 
+    # Terminate active session if any
+    active_session = db.query(ExamSession).filter(
+        ExamSession.exam_id == exam_id,
+        ExamSession.student_id == access_request.student_id,
+        ExamSession.status.in_([SessionStatus.ACTIVE, SessionStatus.LOCKED, SessionStatus.VERIFYING])
+    ).first()
+
+    if active_session:
+        active_session.status = SessionStatus.TERMINATED
+        active_session.terminated_at = datetime.utcnow()
+        active_session.termination_reason = "Access revoked by examiner."
+        
+        from server.websocket.manager import manager
+        from shared.constants import WSMessageType
+        
+        termination_message = {
+            "type": WSMessageType.EXAMINER_TERMINATE,
+            "reason": "Access revoked by examiner.",
+        }
+        status_update = {
+            "type": WSMessageType.STUDENT_STATUS_UPDATE,
+            "session_id": active_session.id,
+            "state": SessionStatus.TERMINATED.value,
+            "reason": "Access revoked by examiner.",
+        }
+        
+        if background_tasks is not None:
+            background_tasks.add_task(manager.send_to_student, active_session.id, termination_message)
+            background_tasks.add_task(manager.broadcast_to_examiners, exam_id, status_update)
+        else:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(manager.send_to_student(active_session.id, termination_message))
+                loop.create_task(manager.broadcast_to_examiners(exam_id, status_update))
+            except RuntimeError:
+                pass
+
     db.delete(access_request)
     db.commit()
 
@@ -1246,3 +1296,172 @@ def reject_exam_access_request(
         "request_id": request_id,
         "exam_id": exam_id,
     }
+
+
+class ManualAccessRequest(BaseModel):
+    email: str
+
+
+@router.post("/exams/{exam_id}/access-requests/manual")
+def add_manual_exam_access(
+    exam_id: str,
+    payload: ManualAccessRequest,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner manually adds/invites a candidate by email (creates a pre-approved access request).
+    """
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+
+    student = db.query(User).filter(
+        User.email == payload.email.strip().lower(),
+        User.role == Role.STUDENT,
+    ).first()
+
+    if not student:
+        raise HTTPException(status_code=404, detail="Student not found with this email")
+
+    # Check if access request already exists
+    existing = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.student_id == student.id,
+        ExamAccessRequest.exam_id == exam_id,
+    ).first()
+
+    if existing:
+        if existing.approved:
+            raise HTTPException(status_code=400, detail="Student already has approved access to this exam")
+        existing.approved = True
+        db.commit()
+        db.refresh(existing)
+        return {
+            "message": "Existing access request approved.",
+            "request_id": existing.id,
+            "exam_id": exam_id,
+            "student_id": student.id,
+            "approved": True,
+        }
+
+    access_request = ExamAccessRequest(
+        student_id=student.id,
+        exam_id=exam_id,
+        approved=True,
+    )
+    db.add(access_request)
+    db.commit()
+    db.refresh(access_request)
+
+    return {
+        "message": "Candidate added successfully.",
+        "request_id": access_request.id,
+        "exam_id": exam_id,
+        "student_id": student.id,
+        "approved": True,
+    }
+
+
+@router.put("/exams/{exam_id}/access-requests/approve-all")
+def approve_all_exam_access_requests(
+    exam_id: str,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner approves all pending requests for an exam.
+    """
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+
+    pending_requests = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.exam_id == exam_id,
+        ExamAccessRequest.approved == False,
+    ).all()
+
+    for r in pending_requests:
+        r.approved = True
+
+    db.commit()
+    return {"message": f"Approved {len(pending_requests)} pending access requests."}
+
+
+@router.put("/exams/{exam_id}/access-requests/revoke-all")
+def revoke_all_exam_access_requests(
+    exam_id: str,
+    background_tasks: BackgroundTasks = None,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner rejects/removes all approved requests for an exam.
+    """
+    exam = db.query(Exam).filter(
+        Exam.id == exam_id,
+        Exam.creator_id == current_user.id,
+    ).first()
+
+    if not exam:
+        raise HTTPException(status_code=404, detail="Exam not found or not yours")
+
+    approved_requests = db.query(ExamAccessRequest).filter(
+        ExamAccessRequest.exam_id == exam_id,
+        ExamAccessRequest.approved == True,
+    ).all()
+
+    count = len(approved_requests)
+    student_ids = [r.student_id for r in approved_requests]
+
+    for r in approved_requests:
+        db.delete(r)
+
+    # Terminate active sessions for these students
+    active_sessions = db.query(ExamSession).filter(
+        ExamSession.exam_id == exam_id,
+        ExamSession.student_id.in_(student_ids),
+        ExamSession.status.in_([SessionStatus.ACTIVE, SessionStatus.LOCKED, SessionStatus.VERIFYING])
+    ).all()
+
+    for session in active_sessions:
+        session.status = SessionStatus.TERMINATED
+        session.terminated_at = datetime.utcnow()
+        session.termination_reason = "Access revoked by examiner."
+        
+        from server.websocket.manager import manager
+        from shared.constants import WSMessageType
+        
+        termination_message = {
+            "type": WSMessageType.EXAMINER_TERMINATE,
+            "reason": "Access revoked by examiner.",
+        }
+        status_update = {
+            "type": WSMessageType.STUDENT_STATUS_UPDATE,
+            "session_id": session.id,
+            "state": SessionStatus.TERMINATED.value,
+            "reason": "Access revoked by examiner.",
+        }
+        
+        if background_tasks is not None:
+            background_tasks.add_task(manager.send_to_student, session.id, termination_message)
+            background_tasks.add_task(manager.broadcast_to_examiners, exam_id, status_update)
+        else:
+            import asyncio
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(manager.send_to_student(session.id, termination_message))
+                loop.create_task(manager.broadcast_to_examiners(exam_id, status_update))
+            except RuntimeError:
+                pass
+
+    db.commit()
+    return {"message": f"Revoked access and terminated sessions for {count} candidates."}
+

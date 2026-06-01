@@ -713,7 +713,10 @@ def get_session_proctoring_events(
 
     events = (
         db.query(ProctoringEvent)
-        .filter(ProctoringEvent.session_id == session_id)
+        .filter(
+            ProctoringEvent.session_id == session_id,
+            ProctoringEvent.dismissed == False,
+        )
         .order_by(ProctoringEvent.timestamp.desc())
         .all()
     )
@@ -739,6 +742,32 @@ def get_session_proctoring_events(
         }
         for ev in events
     ]
+
+
+@router.post("/proctoring-events/{event_id}/dismiss")
+def dismiss_proctoring_event(
+    event_id: str,
+    current_user: User = Depends(require_examiner),
+    db: Session = Depends(get_db),
+):
+    """
+    Examiner marks a proctoring event alert as dismissed.
+    """
+    event = db.query(ProctoringEvent).filter(ProctoringEvent.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Proctoring event not found")
+
+    session = event.session
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found for event")
+
+    exam = session.exam
+    if not exam or exam.creator_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Not allowed to dismiss this event")
+
+    event.dismissed = True
+    db.commit()
+    return {"message": "Alert dismissed successfully", "event_id": event_id}
 
 
 # ── Examiner Routes ────────────────────────────────────────────────────────

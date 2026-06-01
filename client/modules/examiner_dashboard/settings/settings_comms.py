@@ -91,12 +91,12 @@ class _CheckTile(QFrame):
         title_color = _TXT_DIM if spec.locked else _TXT
         self._title_lbl = QLabel(spec.title)
         self._title_lbl.setStyleSheet(
-            f"font-size: 14px; font-weight: 800; color: {title_color}; background: transparent;"
+            f"font-size: 14px; font-weight: 800; color: {title_color}; background: transparent; border: none;"
         )
         self._desc_lbl = QLabel(spec.desc)
         self._desc_lbl.setWordWrap(True)
         self._desc_lbl.setStyleSheet(
-            f"font-size: 12px; color: {_TXT_DIM if spec.locked else _TXT_MUTED}; background: transparent;"
+            f"font-size: 12px; color: {_TXT_DIM if spec.locked else _TXT_MUTED}; background: transparent; border: none;"
         )
         text_lay.addWidget(self._title_lbl)
         text_lay.addWidget(self._desc_lbl)

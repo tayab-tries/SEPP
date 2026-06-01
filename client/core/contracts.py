@@ -65,3 +65,17 @@ def normalize_question_payload(raw: dict) -> dict:
 
 def normalize_question_list(items: Iterable[dict]) -> list[dict]:
     return [normalize_question_payload(item) for item in items or []]
+
+
+def resolve_student_name(payload: dict) -> str:
+    """
+    Modular resolver for student name/display from a session, event, or enrollment payload.
+    """
+    name = payload.get("student_name") or payload.get("full_name") or payload.get("name")
+    if name:
+        return str(name)
+    student_id = payload.get("student_id")
+    if student_id:
+        student_id_str = str(student_id)
+        return student_id_str[:12] + "..." if len(student_id_str) > 12 else student_id_str
+    return "Student"
